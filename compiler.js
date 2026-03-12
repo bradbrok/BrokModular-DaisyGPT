@@ -32,12 +32,10 @@ extern "C" {
 // Appended to user code: provides extern "C" exports for AudioWorklet
 const WRAPPER_SUFFIX = `\
 
-static float _wbuf_inL[1]  = {0.0f};
-static float _wbuf_inR[1]  = {0.0f};
-static const float* _wbuf_inPtrs[2]  = {_wbuf_inL, _wbuf_inR};
-static float _wbuf_outL[1] = {0.0f};
-static float _wbuf_outR[1] = {0.0f};
-static float* _wbuf_outPtrs[2] = {_wbuf_outL, _wbuf_outR};
+static float _wbuf_in[4][1]  = {};
+static const float* _wbuf_inPtrs[4]  = {_wbuf_in[0], _wbuf_in[1], _wbuf_in[2], _wbuf_in[3]};
+static float _wbuf_out[4][1] = {};
+static float* _wbuf_outPtrs[4] = {_wbuf_out[0], _wbuf_out[1], _wbuf_out[2], _wbuf_out[3]};
 
 extern "C" {
 
@@ -47,14 +45,13 @@ void init(float sr) {
 }
 
 float processSample() {
-    _wbuf_outL[0] = 0.0f;
-    _wbuf_outR[0] = 0.0f;
+    for (int i = 0; i < 4; i++) _wbuf_out[i][0] = 0.0f;
     AudioCallback(
         (daisy::AudioHandle::InputBuffer)_wbuf_inPtrs,
         (daisy::AudioHandle::OutputBuffer)_wbuf_outPtrs,
         1
     );
-    return _wbuf_outL[0];
+    return _wbuf_out[0][0];
 }
 
 void setKnob(int index, float value) {
