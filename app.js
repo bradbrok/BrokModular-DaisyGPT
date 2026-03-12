@@ -45,6 +45,7 @@ const state = {
   // Thinking / reasoning
   thinkingEnabled: localStorage.getItem('daisy-gpt-thinking') === 'true',
   thinkingBudget: parseInt(localStorage.getItem('daisy-gpt-thinking-budget')) || 10000,
+  reasoningEffort: localStorage.getItem('daisy-gpt-reasoning-effort') || 'low',
   // Active tab
   activeTab: 'chat',
   // File viewer state
@@ -180,7 +181,7 @@ Use cvToFreq() for frequency from MIDI pitch.\n\n` + systemPrompt;
   if (state.thinkingEnabled && modelSupportsThinking()) {
     callOptions.thinking = true;
     callOptions.budgetTokens = state.thinkingBudget;
-    callOptions.reasoningEffort = budgetToEffort(state.thinkingBudget);
+    callOptions.reasoningEffort = getReasoningEffort();
     let thinkingContent = '';
     let thinkingEl = null;
     callOptions.onThinking = (token) => {
@@ -424,10 +425,8 @@ function modelSupportsThinking() {
   return !!(model?.thinking || model?.reasoning);
 }
 
-function budgetToEffort(budget) {
-  if (budget <= 4096) return 'low';
-  if (budget <= 16000) return 'medium';
-  return 'high';
+function getReasoningEffort() {
+  return state.reasoningEffort || 'low';
 }
 
 function formatBudget(val) {
@@ -465,22 +464,39 @@ function renderThinkingContent(detailsEl, text) {
   }
 }
 
+function currentModelDef() {
+  const provider = PROVIDERS[state.provider];
+  if (!provider) return null;
+  return provider.models.find(m => m.id === state.model) || null;
+}
+
 function updateThinkingControls() {
   const controls = $('#thinking-controls');
   const toggle = $('#thinking-toggle');
   const budgetControl = $('#budget-control');
+  const effortControl = $('#effort-control');
   if (!controls) return;
 
   const supported = modelSupportsThinking();
   controls.classList.toggle('hidden', !supported);
 
   if (toggle) toggle.checked = state.thinkingEnabled;
-  if (budgetControl) budgetControl.classList.toggle('hidden', !state.thinkingEnabled);
+
+  const model = currentModelDef();
+  const isThinking = model?.thinking;
+  const isReasoning = model?.reasoning;
+
+  // Show budget slider for Anthropic thinking, effort dropdown for OpenAI reasoning
+  if (budgetControl) budgetControl.classList.toggle('hidden', !(state.thinkingEnabled && isThinking));
+  if (effortControl) effortControl.classList.toggle('hidden', !(state.thinkingEnabled && isReasoning));
 
   const budgetSlider = $('#thinking-budget');
   const budgetLabel = $('#budget-value');
   if (budgetSlider) budgetSlider.value = state.thinkingBudget;
   if (budgetLabel) budgetLabel.textContent = formatBudget(state.thinkingBudget);
+
+  const effortSelect = $('#reasoning-effort');
+  if (effortSelect) effortSelect.value = state.reasoningEffort;
 }
 
 function finalizeAssistantBubble(msgEl, fullText) {
@@ -1884,12 +1900,18 @@ function init() {
     updateThinkingControls();
   });
 
-  // Thinking budget slider
+  // Thinking budget slider (Anthropic)
   $('#thinking-budget')?.addEventListener('input', (e) => {
     state.thinkingBudget = parseInt(e.target.value);
     localStorage.setItem('daisy-gpt-thinking-budget', state.thinkingBudget);
     const label = $('#budget-value');
     if (label) label.textContent = formatBudget(state.thinkingBudget);
+  });
+
+  // Reasoning effort dropdown (OpenAI)
+  $('#reasoning-effort')?.addEventListener('change', (e) => {
+    state.reasoningEffort = e.target.value;
+    localStorage.setItem('daisy-gpt-reasoning-effort', state.reasoningEffort);
   });
 
   // Skill selector

@@ -225,6 +225,21 @@ select {
   min-width: 24px;
 }
 
+.effort-control {
+  display: flex;
+  align-items: center;
+}
+
+.effort-control.hidden {
+  display: none;
+}
+
+.effort-control select {
+  min-width: auto;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
 /* Thinking block in chat bubbles */
 .thinking-block {
   margin-bottom: 8px;
