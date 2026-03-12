@@ -6,12 +6,23 @@ export const PROVIDERS = {
     name: 'Anthropic',
     keySlot: 'daisy-gpt-anthropic-key',
     models: [
-      { id: 'claude-opus-4-6', label: 'Opus 4.6' },
-      { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
-      { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+      { id: 'claude-opus-4-6', label: 'Opus 4.6', thinking: true },
+      { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', thinking: true },
+      { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', thinking: true },
     ],
 
-    async call(apiKey, model, systemPrompt, messages, onToken, signal) {
+    async call(apiKey, model, systemPrompt, messages, onToken, signal, options = {}) {
+      const body = {
+        model,
+        max_tokens: options.thinking ? Math.max(16000, (options.budgetTokens || 10000) + 4096) : 4096,
+        system: systemPrompt,
+        messages,
+        stream: true,
+      };
+      if (options.thinking) {
+        body.thinking = { type: 'enabled', budget_tokens: options.budgetTokens || 10000 };
+      }
+
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         signal,
@@ -21,13 +32,7 @@ export const PROVIDERS = {
           'content-type': 'application/json',
           'anthropic-dangerous-direct-browser-access': 'true',
         },
-        body: JSON.stringify({
-          model,
-          max_tokens: 4096,
-          system: systemPrompt,
-          messages,
-          stream: true,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
@@ -35,14 +40,33 @@ export const PROVIDERS = {
         throw new Error(err.error?.message || `API error ${response.status}`);
       }
 
+      let currentBlockType = null;
       await readSSE(response, (event) => {
-        if (event.type === 'content_block_delta' && event.delta?.text) {
-          onToken(event.delta.text);
+        if (event.type === 'content_block_start') {
+          currentBlockType = event.content_block?.type;
+        } else if (event.type === 'content_block_delta') {
+          if (currentBlockType === 'thinking' && event.delta?.thinking && options.onThinking) {
+            options.onThinking(event.delta.thinking);
+          } else if (event.delta?.text) {
+            onToken(event.delta.text);
+          }
+        } else if (event.type === 'content_block_stop') {
+          currentBlockType = null;
         }
       });
     },
 
-    async callSync(apiKey, model, systemPrompt, messages) {
+    async callSync(apiKey, model, systemPrompt, messages, options = {}) {
+      const body = {
+        model,
+        max_tokens: options.thinking ? Math.max(16000, (options.budgetTokens || 10000) + 4096) : 4096,
+        system: systemPrompt,
+        messages,
+      };
+      if (options.thinking) {
+        body.thinking = { type: 'enabled', budget_tokens: options.budgetTokens || 10000 };
+      }
+
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -51,17 +75,13 @@ export const PROVIDERS = {
           'content-type': 'application/json',
           'anthropic-dangerous-direct-browser-access': 'true',
         },
-        body: JSON.stringify({
-          model,
-          max_tokens: 4096,
-          system: systemPrompt,
-          messages,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) throw new Error(`API error ${response.status}`);
       const data = await response.json();
-      return data.content[0]?.text || '';
+      const textBlock = data.content.find(b => b.type === 'text');
+      return textBlock?.text || data.content[0]?.text || '';
     },
 
     async test(apiKey) {
@@ -87,17 +107,23 @@ export const PROVIDERS = {
     name: 'OpenAI',
     keySlot: 'daisy-gpt-openai-key',
     models: [
-      { id: 'gpt-5.4', label: 'GPT-5.4' },
-      { id: 'gpt-5-mini', label: 'GPT-5 Mini' },
-      { id: 'o3', label: 'o3' },
-      { id: 'o4-mini', label: 'o4-mini' },
+      { id: 'gpt-5.4', label: 'GPT-5.4', reasoning: true },
+      { id: 'gpt-5-mini', label: 'GPT-5 Mini', reasoning: true },
+      { id: 'o3', label: 'o3', reasoning: true },
+      { id: 'o4-mini', label: 'o4-mini', reasoning: true },
     ],
 
-    async call(apiKey, model, systemPrompt, messages, onToken, signal) {
+    async call(apiKey, model, systemPrompt, messages, onToken, signal, options = {}) {
       const input = [];
       input.push({ role: 'developer', content: systemPrompt });
       for (const m of messages) {
         input.push({ role: m.role, content: m.content });
+      }
+
+      const body = { model, input, stream: true };
+      const modelDef = this.models.find(m => m.id === model);
+      if (options.thinking && modelDef?.reasoning) {
+        body.reasoning = { effort: options.reasoningEffort || 'medium' };
       }
 
       const response = await fetch('https://api.openai.com/v1/responses', {
@@ -107,11 +133,7 @@ export const PROVIDERS = {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          model,
-          input,
-          stream: true,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
@@ -123,14 +145,23 @@ export const PROVIDERS = {
         if (event.type === 'response.output_text.delta' && event.delta) {
           onToken(event.delta);
         }
+        if (event.type === 'response.reasoning_summary_text.delta' && event.delta && options.onThinking) {
+          options.onThinking(event.delta);
+        }
       });
     },
 
-    async callSync(apiKey, model, systemPrompt, messages) {
+    async callSync(apiKey, model, systemPrompt, messages, options = {}) {
       const input = [];
       input.push({ role: 'developer', content: systemPrompt });
       for (const m of messages) {
         input.push({ role: m.role, content: m.content });
+      }
+
+      const body = { model, input };
+      const modelDef = this.models.find(m => m.id === model);
+      if (options.thinking && modelDef?.reasoning) {
+        body.reasoning = { effort: options.reasoningEffort || 'medium' };
       }
 
       const response = await fetch('https://api.openai.com/v1/responses', {
@@ -139,7 +170,7 @@ export const PROVIDERS = {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ model, input }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) throw new Error(`API error ${response.status}`);
@@ -167,13 +198,13 @@ export const PROVIDERS = {
     name: 'OpenRouter',
     keySlot: 'daisy-gpt-openrouter-key',
     models: [
-      { id: 'anthropic/claude-opus-4.6', label: 'Claude Opus 4.6' },
-      { id: 'anthropic/claude-sonnet-4.6', label: 'Claude Sonnet 4.6' },
-      { id: 'openai/gpt-5.4', label: 'GPT-5.4' },
-      { id: 'openai/gpt-5-mini', label: 'GPT-5 Mini' },
+      { id: 'anthropic/claude-opus-4.6', label: 'Claude Opus 4.6', thinking: true },
+      { id: 'anthropic/claude-sonnet-4.6', label: 'Claude Sonnet 4.6', thinking: true },
+      { id: 'openai/gpt-5.4', label: 'GPT-5.4', reasoning: true },
+      { id: 'openai/gpt-5-mini', label: 'GPT-5 Mini', reasoning: true },
       { id: 'google/gemini-3-flash-preview', label: 'Gemini 3 Flash' },
       { id: 'deepseek/deepseek-v3.2', label: 'DeepSeek V3.2' },
-      { id: 'openai/o3', label: 'o3' },
+      { id: 'openai/o3', label: 'o3', reasoning: true },
     ],
 
     async call(apiKey, model, systemPrompt, messages, onToken, signal) {

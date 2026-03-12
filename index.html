@@ -30,6 +30,17 @@
         <option value="openrouter">OpenRouter</option>
       </select>
       <select id="model-select"></select>
+      <div class="thinking-controls" id="thinking-controls">
+        <label class="toggle-label" title="Extended Thinking / Reasoning">
+          <input type="checkbox" id="thinking-toggle">
+          <span class="toggle-switch"></span>
+          <span class="toggle-text">Think</span>
+        </label>
+        <div class="budget-control hidden" id="budget-control">
+          <input type="range" id="thinking-budget" min="1024" max="32000" step="1024" value="10000">
+          <span id="budget-value">10k</span>
+        </div>
+      </div>
       <select id="skill-select">
         <option value="">No skill</option>
       </select>

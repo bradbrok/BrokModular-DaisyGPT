@@ -42,6 +42,9 @@ const state = {
   compiledWithClang: false,
   // File registry for VFS browser
   fileRegistry: new Map(),
+  // Thinking / reasoning
+  thinkingEnabled: localStorage.getItem('daisy-gpt-thinking') === 'true',
+  thinkingBudget: parseInt(localStorage.getItem('daisy-gpt-thinking-budget')) || 10000,
   // Active tab
   activeTab: 'chat',
   // File viewer state
@@ -172,11 +175,28 @@ Use cvToFreq() for frequency from MIDI pitch.\n\n` + systemPrompt;
   state.streamingContent = '';
   state.streamingMessageEl = assistantEl;
 
+  // Build thinking/reasoning options
+  const callOptions = {};
+  if (state.thinkingEnabled && modelSupportsThinking()) {
+    callOptions.thinking = true;
+    callOptions.budgetTokens = state.thinkingBudget;
+    callOptions.reasoningEffort = budgetToEffort(state.thinkingBudget);
+    let thinkingContent = '';
+    let thinkingEl = null;
+    callOptions.onThinking = (token) => {
+      if (!thinkingEl) {
+        thinkingEl = createThinkingBlock(assistantEl);
+      }
+      thinkingContent += token;
+      renderThinkingContent(thinkingEl, thinkingContent);
+    };
+  }
+
   try {
     await provider.call(currentApiKey(), state.model, systemPrompt, state.messages, (token) => {
       state.streamingContent += token;
       renderStreamingBubble(state.streamingMessageEl, state.streamingContent);
-    }, state.abortController?.signal);
+    }, state.abortController?.signal, callOptions);
 
     // Stream complete
     const fullResponse = state.streamingContent;
@@ -393,6 +413,74 @@ function renderStreamingBubble(msgEl, rawText) {
       if (container) container.scrollTop = container.scrollHeight;
     });
   }
+}
+
+// ─── Thinking / Reasoning ─────────────────────────────────────────
+
+function modelSupportsThinking() {
+  const provider = PROVIDERS[state.provider];
+  if (!provider) return false;
+  const model = provider.models.find(m => m.id === state.model);
+  return !!(model?.thinking || model?.reasoning);
+}
+
+function budgetToEffort(budget) {
+  if (budget <= 4096) return 'low';
+  if (budget <= 16000) return 'medium';
+  return 'high';
+}
+
+function formatBudget(val) {
+  return val >= 1000 ? Math.round(val / 1000) + 'k' : val;
+}
+
+function createThinkingBlock(msgEl) {
+  const body = msgEl.querySelector('.chat-message-body');
+  if (!body) return null;
+  const details = document.createElement('details');
+  details.className = 'thinking-block';
+  details.open = true;
+  const summary = document.createElement('summary');
+  summary.textContent = 'Thinking\u2026';
+  const content = document.createElement('div');
+  content.className = 'thinking-content';
+  details.appendChild(summary);
+  details.appendChild(content);
+  body.appendChild(details);
+  return details;
+}
+
+function renderThinkingContent(detailsEl, text) {
+  if (!detailsEl) return;
+  const content = detailsEl.querySelector('.thinking-content');
+  if (!content) return;
+  if (!detailsEl._rafPending) {
+    detailsEl._rafPending = true;
+    requestAnimationFrame(() => {
+      content.textContent = text;
+      detailsEl._rafPending = false;
+      const container = $('#chat-messages');
+      if (container) container.scrollTop = container.scrollHeight;
+    });
+  }
+}
+
+function updateThinkingControls() {
+  const controls = $('#thinking-controls');
+  const toggle = $('#thinking-toggle');
+  const budgetControl = $('#budget-control');
+  if (!controls) return;
+
+  const supported = modelSupportsThinking();
+  controls.classList.toggle('hidden', !supported);
+
+  if (toggle) toggle.checked = state.thinkingEnabled;
+  if (budgetControl) budgetControl.classList.toggle('hidden', !state.thinkingEnabled);
+
+  const budgetSlider = $('#thinking-budget');
+  const budgetLabel = $('#budget-value');
+  if (budgetSlider) budgetSlider.value = state.thinkingBudget;
+  if (budgetLabel) budgetLabel.textContent = formatBudget(state.thinkingBudget);
 }
 
 function finalizeAssistantBubble(msgEl, fullText) {
@@ -1779,12 +1867,29 @@ function init() {
     state.provider = e.target.value;
     localStorage.setItem('daisy-gpt-provider', state.provider);
     populateModelDropdown();
+    updateThinkingControls();
   });
 
   // Model selector
   $('#model-select')?.addEventListener('change', (e) => {
     state.model = e.target.value;
     localStorage.setItem('daisy-gpt-model', state.model);
+    updateThinkingControls();
+  });
+
+  // Thinking toggle
+  $('#thinking-toggle')?.addEventListener('change', (e) => {
+    state.thinkingEnabled = e.target.checked;
+    localStorage.setItem('daisy-gpt-thinking', state.thinkingEnabled);
+    updateThinkingControls();
+  });
+
+  // Thinking budget slider
+  $('#thinking-budget')?.addEventListener('input', (e) => {
+    state.thinkingBudget = parseInt(e.target.value);
+    localStorage.setItem('daisy-gpt-thinking-budget', state.thinkingBudget);
+    const label = $('#budget-value');
+    if (label) label.textContent = formatBudget(state.thinkingBudget);
   });
 
   // Skill selector
@@ -1871,8 +1976,9 @@ function init() {
   const providerSelect = $('#provider-select');
   if (providerSelect) providerSelect.value = state.provider;
 
-  // Populate model dropdown
+  // Populate model dropdown and thinking controls
   populateModelDropdown();
+  updateThinkingControls();
 
   // Show API key modal if no key
   if (!currentApiKey()) {
