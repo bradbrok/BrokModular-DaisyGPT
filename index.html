@@ -44,26 +44,61 @@
     <!-- Chat panel -->
     <div class="chat-panel">
       <div class="panel-header">
-        <span>Chat</span>
+        <div class="tab-bar">
+          <button class="tab-btn active" data-tab="chat">Chat</button>
+          <button class="tab-btn" data-tab="code">Code</button>
+          <button class="tab-btn" data-tab="files">Files</button>
+        </div>
         <div class="chat-header-actions">
           <button class="btn btn-icon" id="btn-new-chat" title="New Chat">+</button>
           <button class="btn btn-icon" id="btn-undo" disabled title="Undo last code">&#x21B6;</button>
           <button class="btn code-download-btn" id="btn-download" disabled>Download .cpp</button>
         </div>
       </div>
-      <div class="chat-messages" id="chat-messages">
-        <div class="chat-welcome">
-          <div class="chat-welcome-logo">daisy-gpt</div>
-          <p>I'm your Daisy Patch programming assistant. Describe a synth patch and I'll write the code, compile it, and let you play it right here.</p>
-          <p class="chat-welcome-hint">Try: "acid bassline with resonant filter and portamento"</p>
+
+      <!-- Chat tab -->
+      <div class="tab-content active" id="chat-tab">
+        <div class="chat-messages" id="chat-messages">
+          <div class="chat-welcome">
+            <div class="chat-welcome-logo">daisy-gpt</div>
+            <p>I'm your Daisy Patch programming assistant. Describe a synth patch and I'll write the code, compile it, and let you play it right here.</p>
+            <p class="chat-welcome-hint">Try: "acid bassline with resonant filter and portamento"</p>
+          </div>
+        </div>
+        <div class="chat-input-area">
+          <textarea class="chat-textarea" id="chat-input"
+            placeholder="Describe a patch, ask for changes, or ask questions..."
+            rows="1"></textarea>
+          <button class="btn btn-send" id="btn-send" title="Send">&#x27A4;</button>
+          <button class="btn btn-stop-chat hidden" id="btn-stop-chat" title="Stop generating">&#x25a0;</button>
         </div>
       </div>
-      <div class="chat-input-area">
-        <textarea class="chat-textarea" id="chat-input"
-          placeholder="Describe a patch, ask for changes, or ask questions..."
-          rows="1"></textarea>
-        <button class="btn btn-send" id="btn-send" title="Send">&#x27A4;</button>
-        <button class="btn btn-stop-chat hidden" id="btn-stop-chat" title="Stop generating">&#x25a0;</button>
+
+      <!-- Code tab -->
+      <div class="tab-content" id="code-tab">
+        <div class="code-editor-wrap">
+          <textarea class="code-textarea" id="code-editor"
+            placeholder="// Code will appear here after generation or edit..."
+            spellcheck="false"></textarea>
+        </div>
+        <div class="code-editor-footer">
+          <span id="code-editor-status">patch.cpp</span>
+          <span id="code-editor-pos">Ln 1, Col 1</span>
+        </div>
+      </div>
+
+      <!-- Files tab -->
+      <div class="tab-content" id="files-tab">
+        <div class="file-browser" id="file-browser">
+          <div class="file-browser-empty">Load compiler to browse DaisySP headers</div>
+        </div>
+        <div class="file-viewer-wrap hidden" id="file-viewer-wrap">
+          <div class="file-viewer-header">
+            <span id="file-viewer-path"></span>
+            <button class="btn btn-icon file-viewer-close" id="file-viewer-close">&#x2715;</button>
+          </div>
+          <pre class="file-viewer-content"><code id="file-viewer-code"></code></pre>
+        </div>
       </div>
     </div>
 

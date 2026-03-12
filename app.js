@@ -40,6 +40,12 @@ const state = {
   compiler: new WasmClangCompiler(),
   compilerLoading: false,
   compiledWithClang: false,
+  // File registry for VFS browser
+  fileRegistry: new Map(),
+  // Active tab
+  activeTab: 'chat',
+  // File viewer state
+  viewingFile: null,
 };
 
 // ─── DOM References ────────────────────────────────────────────────
@@ -78,6 +84,28 @@ IMPORTANT CODE CONSTRAINTS:
 - Gate inputs: patch.gate_input[0].Trig() for trigger detection
 
 After providing code, briefly explain what each knob controls.
+
+EDIT COMMANDS:
+When the user asks for a small change to existing code, prefer edit commands over full regeneration.
+Use edit blocks for param tweaks, adding modules, fixing bugs, changing knob ranges.
+Use full \`\`\`cpp code blocks for new patches or extensive rewrites (>50% of code changes).
+
+Edit format — wrap each edit in a fenced \`\`\`edit block:
+\`\`\`edit
+--- patch.cpp
+<<<<<<< SEARCH
+exact lines to find in current code
+=======
+replacement lines
+>>>>>>> REPLACE
+\`\`\`
+
+Rules:
+- SEARCH text must match the current code exactly (including indentation)
+- Include 1-2 context lines around the change for unique matching
+- Empty REPLACE section = delete the matched lines
+- Multiple edit blocks per response are fine, applied in order
+- If you're unsure the match is unique, include more context lines
 
 Be concise but helpful. Focus on being a great collaborator.
 
@@ -126,6 +154,9 @@ Use cvToFreq() for frequency from MIDI pitch.\n\n` + systemPrompt;
   }
   if (state.code) {
     systemPrompt += `\n\nCURRENT CODE (the user's active patch — reference or modify as needed):\n\`\`\`cpp\n${state.code}\n\`\`\``;
+    if (state.code.split('\n').length > 20) {
+      systemPrompt += '\nThe user has existing code. Prefer edit commands for small changes.';
+    }
   }
 
   const provider = PROVIDERS[state.provider];
@@ -152,13 +183,57 @@ Use cvToFreq() for frequency from MIDI pitch.\n\n` + systemPrompt;
     state.messages.push({ role: 'assistant', content: fullResponse });
     finalizeAssistantBubble(state.streamingMessageEl, fullResponse);
 
-    // Extract code from ```cpp blocks
+    // Check for edits first, then full code blocks
+    const edits = extractEditsFromResponse(fullResponse);
     const extractedCode = extractCodeFromResponse(fullResponse);
-    if (extractedCode) {
+
+    if (edits.length > 0 && state.code) {
+      // Apply edit commands
+      const { code, results } = applyEdits(edits, state.code);
+      const allOk = results.every(r => r.ok);
+
+      if (allOk) {
+        state.previousCode = state.code;
+        state.code = code;
+        extractKnobLabels(state.code);
+        updateKnobLabels();
+        syncCodeToEditor();
+        flashTab('code');
+        showToast(`${results.length} edit(s) applied`);
+        addToHistory(userText, state.code);
+
+        state.isGenerating = false;
+        state.abortController = null;
+        updateUI();
+        await compileCode();
+      } else {
+        // Some edits failed — report in chat
+        const failCount = results.filter(r => !r.ok).length;
+        const errMsg = `${failCount} of ${results.length} edit(s) failed to match. `;
+        const partial = results.some(r => r.ok);
+        if (partial) {
+          state.previousCode = state.code;
+          state.code = code;
+          extractKnobLabels(state.code);
+          updateKnobLabels();
+          syncCodeToEditor();
+          flashTab('code');
+          appendChatBubble('assistant', errMsg + 'Partial edits applied.');
+        } else {
+          appendChatBubble('assistant', errMsg + 'No changes applied.');
+        }
+        state.isGenerating = false;
+        state.abortController = null;
+        updateUI();
+        if (partial) await compileCode();
+      }
+    } else if (extractedCode) {
       state.previousCode = state.code;
       state.code = extractedCode;
       extractKnobLabels(state.code);
       updateKnobLabels();
+      syncCodeToEditor();
+      flashTab('code');
       addToHistory(userText, state.code);
 
       state.isGenerating = false;
@@ -202,6 +277,72 @@ function extractCodeFromResponse(text) {
     lastMatch = match[1];
   }
   return lastMatch ? lastMatch.trim() : null;
+}
+
+// ─── Edit Parsing & Application ───────────────────────────────────
+
+function extractEditsFromResponse(text) {
+  const edits = [];
+  const regex = /```edit\s*\n([\s\S]*?)```/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const block = match[1];
+    // Parse --- filename
+    const fileMatch = block.match(/^---\s*(\S+)\s*$/m);
+    const file = fileMatch ? fileMatch[1] : 'patch.cpp';
+
+    // Parse SEARCH/REPLACE
+    const srMatch = block.match(/<<<<<<< SEARCH\n([\s\S]*?)=======\n([\s\S]*?)>>>>>>> REPLACE/);
+    if (srMatch) {
+      edits.push({
+        file,
+        search: srMatch[1].replace(/\n$/, ''),
+        replace: srMatch[2].replace(/\n$/, ''),
+      });
+    }
+  }
+  return edits;
+}
+
+function applyEdits(edits, code) {
+  let current = code;
+  const results = [];
+
+  for (const edit of edits) {
+    // Exact match first
+    let idx = current.indexOf(edit.search);
+
+    // Fuzzy fallback: normalize trailing whitespace per line
+    if (idx === -1) {
+      const normCode = current.split('\n').map(l => l.trimEnd()).join('\n');
+      const normSearch = edit.search.split('\n').map(l => l.trimEnd()).join('\n');
+      const normIdx = normCode.indexOf(normSearch);
+      if (normIdx !== -1) {
+        const beforeNorm = normCode.substring(0, normIdx);
+        const linesBefore = beforeNorm.split('\n').length - 1;
+        const origLines = current.split('\n');
+        let origOffset = 0;
+        for (let i = 0; i < linesBefore; i++) {
+          origOffset += origLines[i].length + 1;
+        }
+        const searchLineCount = edit.search.split('\n').length;
+        const origSearchLines = origLines.slice(linesBefore, linesBefore + searchLineCount);
+        const origSearchText = origSearchLines.join('\n');
+        current = current.substring(0, origOffset) + edit.replace + current.substring(origOffset + origSearchText.length);
+        results.push({ ok: true, edit });
+        continue;
+      }
+    }
+
+    if (idx !== -1) {
+      current = current.substring(0, idx) + edit.replace + current.substring(idx + edit.search.length);
+      results.push({ ok: true, edit });
+    } else {
+      results.push({ ok: false, edit, reason: 'SEARCH text not found in code' });
+    }
+  }
+
+  return { code: current, results };
 }
 
 // ─── Chat Rendering ───────────────────────────────────────────────
@@ -287,6 +428,8 @@ function finalizeAssistantBubble(msgEl, fullText) {
       state.code = block.textContent;
       extractKnobLabels(state.code);
       updateKnobLabels();
+      syncCodeToEditor();
+      switchTab('code');
       updateUI();
       compileCode();
     });
@@ -303,7 +446,7 @@ function finalizeAssistantBubble(msgEl, fullText) {
 // ─── Markdown Renderer (lightweight) ──────────────────────────────
 
 function renderMarkdown(text) {
-  // Protect code fences
+  // Protect code fences (including edit blocks)
   const codeBlocks = [];
   let processed = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
     const idx = codeBlocks.length;
@@ -330,11 +473,53 @@ function renderMarkdown(text) {
   // Restore code blocks
   processed = processed.replace(/\x00CODEBLOCK(\d+)\x00/g, (_, idx) => {
     const { lang, code } = codeBlocks[parseInt(idx)];
+
+    // Render edit blocks as diff views
+    if (lang === 'edit') {
+      return renderEditBlock(code);
+    }
+
     const langClass = lang ? ` class="language-${lang}"` : '';
     return `<pre><code${langClass}>${escapeHtml(code)}</code></pre>`;
   });
 
   return processed;
+}
+
+function renderEditBlock(code) {
+  const fileMatch = code.match(/^---\s*(\S+)\s*$/m);
+  const file = fileMatch ? fileMatch[1] : 'patch.cpp';
+
+  const srMatch = code.match(/<<<<<<< SEARCH\n([\s\S]*?)=======\n([\s\S]*?)>>>>>>> REPLACE/);
+  if (!srMatch) {
+    return `<pre><code>${escapeHtml(code)}</code></pre>`;
+  }
+
+  const searchLines = srMatch[1].replace(/\n$/, '').split('\n');
+  const replaceLines = srMatch[2].replace(/\n$/, '').split('\n');
+
+  let diffHtml = '<div class="edit-diff-block">';
+  diffHtml += `<div class="edit-diff-header"><span>${escapeHtml(file)}</span></div>`;
+  diffHtml += '<div class="edit-diff-body">';
+
+  for (const line of searchLines) {
+    diffHtml += `<div class="edit-diff-line remove">${escapeHtml(line)}</div>`;
+  }
+  // Show replace lines only if non-empty (empty = deletion)
+  const hasReplace = replaceLines.length > 1 || replaceLines[0] !== '';
+  if (hasReplace) {
+    for (const line of replaceLines) {
+      diffHtml += `<div class="edit-diff-line add">${escapeHtml(line)}</div>`;
+    }
+  }
+
+  diffHtml += '</div>';
+  diffHtml += '<div class="edit-diff-actions">';
+  diffHtml += `<button onclick="window._applyEditFromChat(this)" data-search="${btoa(encodeURIComponent(srMatch[1].replace(/\n$/, '')))}" data-replace="${btoa(encodeURIComponent(srMatch[2].replace(/\n$/, '')))}">Apply edit</button>`;
+  diffHtml += '</div>';
+  diffHtml += '</div>';
+
+  return diffHtml;
 }
 
 function extractKnobLabels(code) {
@@ -433,6 +618,7 @@ async function loadCompiler() {
       setStatus('compiling', msg);
     });
     setStatus('success', 'Compiler cached and ready');
+    populateFileRegistry();
     updateUI();
 
     // If we have code that was compiled as preview, recompile with C++
@@ -461,7 +647,10 @@ function stopGeneration() {
 async function autoFixCompileError(errorMsg) {
   if (!currentApiKey()) return;
   if (state.abortController?.signal?.aborted) return;
-  const fixPrompt = `The code has a compile error:\n\n\`\`\`\n${errorMsg}\n\`\`\`\n\nPlease fix it and provide the corrected complete code.`;
+  const editHint = state.code && state.code.split('\n').length > 20
+    ? ' Use edit commands to fix just the broken parts rather than regenerating everything.'
+    : '';
+  const fixPrompt = `The code has a compile error:\n\n\`\`\`\n${errorMsg}\n\`\`\`\n\nPlease fix it.${editHint}`;
   await sendMessage(fixPrompt);
 }
 
@@ -864,6 +1053,7 @@ function restoreFromHistory(index) {
   state.code = entry.code;
   extractKnobLabels(state.code);
   updateKnobLabels();
+  syncCodeToEditor();
 
   // Show restored code in chat
   const content = `Restored patch from history:\n\n\`\`\`cpp\n${entry.code}\n\`\`\``;
@@ -1237,6 +1427,256 @@ function updateMIDIDeviceDropdown(devices) {
   }
 }
 
+// ─── Code Panel & Tabs ────────────────────────────────────────────
+
+function syncCodeToEditor() {
+  const editor = $('#code-editor');
+  if (editor) {
+    editor.value = state.code;
+    editor.readOnly = false;
+    const statusEl = $('#code-editor-status');
+    if (statusEl) statusEl.textContent = 'patch.cpp';
+  }
+}
+
+function syncEditorToCode() {
+  const editor = $('#code-editor');
+  if (editor && !editor.readOnly) {
+    state.code = editor.value;
+  }
+}
+
+function switchTab(tabName) {
+  state.activeTab = tabName;
+
+  for (const btn of $$('.tab-btn')) {
+    btn.classList.toggle('active', btn.dataset.tab === tabName);
+    if (btn.dataset.tab === tabName) {
+      btn.classList.remove('has-update');
+    }
+  }
+
+  for (const content of $$('.tab-content')) {
+    content.classList.toggle('active', content.id === `${tabName}-tab`);
+  }
+
+  if (tabName === 'code' && state.code) {
+    syncCodeToEditor();
+  }
+}
+
+function flashTab(tabName) {
+  if (state.activeTab === tabName) return;
+  const btn = $(`.tab-btn[data-tab="${tabName}"]`);
+  if (btn) btn.classList.add('has-update');
+}
+
+function showToast(message) {
+  let toast = $('.toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.className = 'toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = message;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2000);
+}
+
+// ─── File Registry ────────────────────────────────────────────────
+
+function registerFile(path, content, type = 'system') {
+  state.fileRegistry.set(path, { content, type });
+}
+
+function populateFileRegistry() {
+  if (!state.compiler.loaded) return;
+
+  const headers = state.compiler.getHeaders();
+  for (const [path, content] of headers) {
+    registerFile(`include/${path}`, content, 'system');
+  }
+
+  renderFileTree();
+}
+
+function renderFileTree() {
+  const browser = $('#file-browser');
+  if (!browser) return;
+
+  // Build nested tree structure
+  const tree = {};
+  for (const [path, { type }] of state.fileRegistry) {
+    const parts = path.split('/');
+    let node = tree;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!node[parts[i]]) node[parts[i]] = {};
+      node = node[parts[i]];
+    }
+    node[parts[parts.length - 1]] = { _file: true, _path: path, _type: type };
+  }
+
+  browser.innerHTML = '';
+  renderTreeNode(browser, tree, '');
+}
+
+function renderTreeNode(container, node, prefix) {
+  const folders = [];
+  const files = [];
+
+  for (const [name, value] of Object.entries(node)) {
+    if (value._file) {
+      files.push({ name, path: value._path, type: value._type });
+    } else {
+      folders.push({ name, children: value });
+    }
+  }
+
+  folders.sort((a, b) => a.name.localeCompare(b.name));
+  files.sort((a, b) => a.name.localeCompare(b.name));
+
+  for (const folder of folders) {
+    const folderEl = document.createElement('div');
+    folderEl.className = 'file-tree-folder';
+
+    const label = document.createElement('div');
+    label.className = 'file-tree-folder-label';
+
+    const icon = document.createElement('span');
+    icon.className = 'folder-icon';
+    icon.textContent = '\u25b6';
+    label.appendChild(icon);
+    label.appendChild(document.createTextNode(folder.name));
+
+    label.addEventListener('click', () => {
+      folderEl.classList.toggle('open');
+      icon.textContent = folderEl.classList.contains('open') ? '\u25bc' : '\u25b6';
+    });
+
+    const childrenEl = document.createElement('div');
+    childrenEl.className = 'file-tree-children';
+    renderTreeNode(childrenEl, folder.children, prefix + folder.name + '/');
+
+    folderEl.appendChild(label);
+    folderEl.appendChild(childrenEl);
+    container.appendChild(folderEl);
+  }
+
+  for (const file of files) {
+    const fileEl = document.createElement('div');
+    fileEl.className = 'file-tree-file';
+
+    const fileIcon = document.createElement('span');
+    fileIcon.className = 'file-icon';
+    fileIcon.textContent = '\u25a1';
+    fileEl.appendChild(fileIcon);
+    fileEl.appendChild(document.createTextNode(file.name));
+
+    fileEl.addEventListener('click', () => openFileViewer(file.path));
+    container.appendChild(fileEl);
+  }
+}
+
+function openFileViewer(path) {
+  const entry = state.fileRegistry.get(path);
+  if (!entry) return;
+
+  state.viewingFile = path;
+
+  const editor = $('#code-editor');
+  const statusEl = $('#code-editor-status');
+  if (editor) {
+    editor.value = entry.content;
+    editor.readOnly = true;
+  }
+  if (statusEl) statusEl.textContent = path + ' (read-only)';
+  switchTab('code');
+}
+
+// Apply edit from chat inline button
+window._applyEditFromChat = function(btn) {
+  const search = decodeURIComponent(atob(btn.dataset.search));
+  const replace = decodeURIComponent(atob(btn.dataset.replace));
+
+  if (!state.code) {
+    showToast('No code to edit');
+    return;
+  }
+
+  const { code, results } = applyEdits([{ file: 'patch.cpp', search, replace }], state.code);
+  if (results[0]?.ok) {
+    state.previousCode = state.code;
+    state.code = code;
+    extractKnobLabels(state.code);
+    updateKnobLabels();
+    syncCodeToEditor();
+    flashTab('code');
+    showToast('Edit applied');
+    updateUI();
+    compileCode();
+    btn.textContent = 'Applied!';
+    btn.disabled = true;
+  } else {
+    showToast('Edit failed: SEARCH text not found');
+    btn.textContent = 'Failed';
+  }
+};
+
+function initCodePanel() {
+  // Tab switching
+  for (const btn of $$('.tab-btn')) {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  }
+
+  // Code editor sync and cursor position
+  const editor = $('#code-editor');
+  if (editor) {
+    editor.addEventListener('input', () => {
+      if (!editor.readOnly) {
+        syncEditorToCode();
+      }
+    });
+
+    // Tab key inserts tab character
+    editor.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const start = editor.selectionStart;
+        const end = editor.selectionEnd;
+        editor.value = editor.value.substring(0, start) + '    ' + editor.value.substring(end);
+        editor.selectionStart = editor.selectionEnd = start + 4;
+        syncEditorToCode();
+      }
+    });
+
+    // Update line/col display
+    const updatePos = () => {
+      const posEl = $('#code-editor-pos');
+      if (!posEl) return;
+      const val = editor.value.substring(0, editor.selectionStart);
+      const lines = val.split('\n');
+      const line = lines.length;
+      const col = lines[lines.length - 1].length + 1;
+      posEl.textContent = `Ln ${line}, Col ${col}`;
+    };
+    editor.addEventListener('click', updatePos);
+    editor.addEventListener('keyup', updatePos);
+  }
+
+  // File viewer close button — return to user code
+  $('#file-viewer-close')?.addEventListener('click', () => {
+    state.viewingFile = null;
+    if (state.code) {
+      syncCodeToEditor();
+    } else {
+      const ed = $('#code-editor');
+      if (ed) { ed.value = ''; ed.readOnly = false; }
+      const st = $('#code-editor-status');
+      if (st) st.textContent = 'patch.cpp';
+    }
+  });
+}
+
 // ─── Event Binding ─────────────────────────────────────────────────
 
 function init() {
@@ -1286,6 +1726,7 @@ function init() {
     if (state.previousCode) {
       state.code = state.previousCode;
       state.previousCode = '';
+      syncCodeToEditor();
       updateUI();
       compileCode();
     }
@@ -1416,6 +1857,9 @@ function init() {
   $('#btn-load-compiler')?.addEventListener('click', () => {
     loadCompiler();
   });
+
+  // Code panel & tabs
+  initCodePanel();
 
   // MIDI Setup
   initMIDI();

@@ -516,6 +516,9 @@ export class WasmClangCompiler {
 
   get loaded() { return this.ready; }
 
+  // Expose DaisySP headers for file browser
+  getHeaders() { return DAISYSP_HEADERS; }
+
   // Lazy-load compiler toolchain (~60MB, cached by ServiceWorker)
   async load(onProgress) {
     if (this.ready) return;

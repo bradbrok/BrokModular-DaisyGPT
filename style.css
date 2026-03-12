@@ -164,6 +164,61 @@ select {
   font-family: var(--font-mono);
 }
 
+/* ─── Tabs ───────────────────────────────────────────────────── */
+
+.tab-bar {
+  display: flex;
+  gap: 2px;
+}
+
+.tab-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 4px 10px;
+  cursor: pointer;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  transition: color 0.15s, background 0.15s;
+  position: relative;
+}
+
+.tab-btn:hover {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.tab-btn.active {
+  color: var(--accent-gold);
+  background: var(--bg-primary);
+}
+
+.tab-btn.has-update::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-gold-bright);
+  animation: blink 1.5s infinite;
+}
+
+.tab-content {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.tab-content.active {
+  display: flex;
+}
+
 /* ─── Chat Panel ─────────────────────────────────────────────── */
 
 .chat-panel {
@@ -182,6 +237,272 @@ select {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* ─── Code Editor Tab ────────────────────────────────────────── */
+
+.code-editor-wrap {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.code-textarea {
+  flex: 1;
+  width: 100%;
+  background: var(--code-bg);
+  color: var(--text-primary);
+  border: none;
+  padding: 12px 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 4;
+  resize: none;
+  outline: none;
+  white-space: pre;
+  overflow: auto;
+}
+
+.code-textarea::placeholder {
+  color: var(--text-dim);
+}
+
+.code-textarea:read-only {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.code-editor-footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 12px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+/* ─── File Browser Tab ───────────────────────────────────────── */
+
+.file-browser {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.file-browser-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.file-tree-folder {
+  margin-left: 0;
+}
+
+.file-tree-folder-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  user-select: none;
+}
+
+.file-tree-folder-label:hover {
+  background: var(--bg-hover);
+}
+
+.file-tree-folder-label .folder-icon {
+  color: var(--accent-gold-dim);
+  font-size: 10px;
+  width: 12px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.file-tree-children {
+  margin-left: 12px;
+  display: none;
+}
+
+.file-tree-folder.open > .file-tree-children {
+  display: block;
+}
+
+.file-tree-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 20px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  user-select: none;
+}
+
+.file-tree-file:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.file-tree-file .file-icon {
+  color: var(--text-dim);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.file-viewer-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.file-viewer-wrap.hidden {
+  display: none;
+}
+
+.file-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-gold-dim);
+  flex-shrink: 0;
+}
+
+.file-viewer-close {
+  font-size: 12px;
+  padding: 2px 6px;
+}
+
+.file-viewer-content {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 12px 16px;
+  background: var(--code-bg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 4;
+  border: none;
+  border-radius: 0;
+}
+
+.file-viewer-content code {
+  font-family: inherit;
+}
+
+/* ─── Edit Diff Blocks ───────────────────────────────────────── */
+
+.edit-diff-block {
+  margin: 8px -6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.edit-diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.edit-diff-body {
+  padding: 6px 0;
+  background: var(--code-bg);
+}
+
+.edit-diff-line {
+  padding: 0 10px;
+  white-space: pre;
+}
+
+.edit-diff-line.remove {
+  background: rgba(196, 64, 48, 0.15);
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+.edit-diff-line.add {
+  background: rgba(212, 168, 67, 0.15);
+  color: var(--accent-gold-bright);
+}
+
+.edit-diff-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.edit-diff-actions button {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.edit-diff-actions button:hover {
+  border-color: var(--accent-gold-dim);
+  color: var(--accent-gold);
+}
+
+/* ─── Toast ──────────────────────────────────────────────────── */
+
+.toast {
+  position: fixed;
+  bottom: 48px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--bg-panel);
+  border: 1px solid var(--accent-gold-dim);
+  color: var(--accent-gold);
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  z-index: 150;
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s;
+  pointer-events: none;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
 /* Welcome screen */
