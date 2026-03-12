@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>daisy-gpt — AI Synth Patch Generator</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/monokai-sublime.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+</head>
+<body>
+
+<!-- Mobile warning -->
+<div class="mobile-warning">
+  <h2>Desktop Recommended</h2>
+  <p>daisy-gpt is best experienced on desktop Chrome. Audio preview and WebUSB flash require a desktop browser.</p>
+</div>
+
+<!-- Main app -->
+<div id="app">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="logo">daisy-gpt <span>browser</span></div>
+    <div class="header-controls">
+      <select id="provider-select">
+        <option value="anthropic">Anthropic</option>
+        <option value="openai">OpenAI</option>
+        <option value="openrouter">OpenRouter</option>
+      </select>
+      <select id="model-select"></select>
+      <select id="skill-select">
+        <option value="">No skill</option>
+      </select>
+      <button class="btn btn-icon" id="btn-history" title="Patch History">&#x1f4cb;</button>
+      <button class="btn btn-icon" id="btn-api-key" title="API Keys">&#x2699;</button>
+    </div>
+  </div>
+
+  <!-- Main content: chat + controls -->
+  <div class="main-content">
+
+    <!-- Chat panel -->
+    <div class="chat-panel">
+      <div class="panel-header">
+        <span>Chat</span>
+        <div class="chat-header-actions">
+          <button class="btn btn-icon" id="btn-new-chat" title="New Chat">+</button>
+          <button class="btn btn-icon" id="btn-undo" disabled title="Undo last code">&#x21B6;</button>
+          <button class="btn code-download-btn" id="btn-download" disabled>Download .cpp</button>
+        </div>
+      </div>
+      <div class="chat-messages" id="chat-messages">
+        <div class="chat-welcome">
+          <div class="chat-welcome-logo">daisy-gpt</div>
+          <p>I'm your Daisy Patch programming assistant. Describe a synth patch and I'll write the code, compile it, and let you play it right here.</p>
+          <p class="chat-welcome-hint">Try: "acid bassline with resonant filter and portamento"</p>
+        </div>
+      </div>
+      <div class="chat-input-area">
+        <textarea class="chat-textarea" id="chat-input"
+          placeholder="Describe a patch, ask for changes, or ask questions..."
+          rows="1"></textarea>
+        <button class="btn btn-send" id="btn-send" title="Send">&#x27A4;</button>
+        <button class="btn btn-stop-chat hidden" id="btn-stop-chat" title="Stop generating">&#x25a0;</button>
+      </div>
+    </div>
+
+    <!-- Controls panel -->
+    <div class="controls-panel">
+      <div class="panel-header"><span>Controls</span></div>
+      <div class="controls-content">
+
+        <!-- Knobs -->
+        <div class="knob-group">
+          <div class="knob-row">
+            <div class="knob-label">
+              <span id="knob-label-0">Knob 1</span>
+              <span class="knob-value" id="knob-val-0">0.50</span>
+            </div>
+            <input type="range" id="knob-0" min="0" max="1" step="0.01" value="0.5">
+          </div>
+          <div class="knob-row">
+            <div class="knob-label">
+              <span id="knob-label-1">Knob 2</span>
+              <span class="knob-value" id="knob-val-1">0.50</span>
+            </div>
+            <input type="range" id="knob-1" min="0" max="1" step="0.01" value="0.5">
+          </div>
+          <div class="knob-row">
+            <div class="knob-label">
+              <span id="knob-label-2">Knob 3</span>
+              <span class="knob-value" id="knob-val-2">0.50</span>
+            </div>
+            <input type="range" id="knob-2" min="0" max="1" step="0.01" value="0.5">
+          </div>
+          <div class="knob-row">
+            <div class="knob-label">
+              <span id="knob-label-3">Knob 4</span>
+              <span class="knob-value" id="knob-val-3">0.50</span>
+            </div>
+            <input type="range" id="knob-3" min="0" max="1" step="0.01" value="0.5">
+          </div>
+        </div>
+
+        <!-- Gates -->
+        <div class="gate-group">
+          <button class="gate-btn" id="gate-0">Gate 1</button>
+          <button class="gate-btn" id="gate-1">Gate 2</button>
+        </div>
+
+        <!-- MIDI -->
+        <div class="midi-group">
+          <div class="midi-header">
+            <span class="midi-title">MIDI</span>
+            <button class="btn btn-midi-connect" id="btn-midi-connect">Connect</button>
+            <select id="midi-device-select" class="midi-device-select">
+              <option value="">No device</option>
+            </select>
+          </div>
+          <div class="midi-readout" id="midi-readout">
+            <span>Note: <strong id="midi-note">--</strong></span>
+            <span>CV: <strong id="midi-cv">0.00</strong></span>
+            <span>Vel: <strong id="midi-vel">0</strong></span>
+            <span>PB: <strong id="midi-pb">0.00</strong></span>
+          </div>
+          <div class="midi-cc-map">
+            <span class="midi-cc-label">CC&rarr;Knob</span>
+            <select class="midi-cc-select" data-knob="0" id="midi-cc-0"></select>
+            <select class="midi-cc-select" data-knob="1" id="midi-cc-1"></select>
+            <select class="midi-cc-select" data-knob="2" id="midi-cc-2"></select>
+            <select class="midi-cc-select" data-knob="3" id="midi-cc-3"></select>
+          </div>
+          <div class="midi-keyboard-hint" title="Computer keyboard: Z-M = white keys, S/D/G/H/J = black keys (C4 octave)">
+            KB: Z&ndash;M = keys
+          </div>
+        </div>
+
+        <!-- Compiler -->
+        <div class="compiler-group">
+          <button class="btn btn-compile" id="btn-compile" disabled>Compile C++</button>
+          <button class="btn btn-load-compiler" id="btn-load-compiler">Load Compiler</button>
+        </div>
+
+        <!-- Transport -->
+        <div class="transport-group">
+          <button class="btn btn-play" id="btn-play">&#x25b6; Play</button>
+          <button class="btn btn-stop" id="btn-stop">&#x25a0; Stop</button>
+        </div>
+
+        <!-- VU Meter -->
+        <div class="vu-meter">
+          <span class="vu-label">Level</span>
+          <div class="vu-bar-container">
+            <div class="vu-bar" id="vu-bar"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div class="status-bar">
+    <span class="status-text" id="status-text">Ready</span>
+    <button class="btn btn-flash" id="btn-flash" disabled>&#x26a1; Flash to Daisy</button>
+  </div>
+</div>
+
+<!-- API Key Modal -->
+<div class="modal-overlay hidden" id="api-key-modal">
+  <div class="modal modal-keys">
+    <h2>API Keys</h2>
+    <p>Enter API keys for the providers you want to use.</p>
+
+    <div class="key-row">
+      <label>Anthropic</label>
+      <div class="key-input-row">
+        <input type="password" id="key-anthropic" placeholder="sk-ant-...">
+        <button class="btn btn-test" data-provider="anthropic">Test</button>
+        <span class="key-status" id="key-status-anthropic"></span>
+      </div>
+    </div>
+
+    <div class="key-row">
+      <label>OpenAI</label>
+      <div class="key-input-row">
+        <input type="password" id="key-openai" placeholder="sk-...">
+        <button class="btn btn-test" data-provider="openai">Test</button>
+        <span class="key-status" id="key-status-openai"></span>
+      </div>
+    </div>
+
+    <div class="key-row">
+      <label>OpenRouter</label>
+      <div class="key-input-row">
+        <input type="password" id="key-openrouter" placeholder="sk-or-...">
+        <button class="btn btn-test" data-provider="openrouter">Test</button>
+        <span class="key-status" id="key-status-openrouter"></span>
+      </div>
+    </div>
+
+    <div class="modal-buttons">
+      <button class="btn" id="btn-cancel-api-key">Cancel</button>
+      <button class="btn btn-save" id="btn-save-api-key">Save All</button>
+    </div>
+    <div class="note">&#x1f512; Your keys are stored locally in your browser. They never leave your machine.</div>
+  </div>
+</div>
+
+<!-- History panel -->
+<div class="history-overlay hidden" id="history-overlay">
+  <div class="history-panel">
+    <div class="history-header">
+      <h2>Patch History</h2>
+      <button class="btn btn-icon" id="btn-close-history">&#x2715;</button>
+    </div>
+    <div class="history-list" id="history-list"></div>
+  </div>
+</div>
+
+<!-- DFU Flash overlay -->
+<div class="dfu-overlay hidden" id="dfu-overlay">
+  <div class="dfu-panel">
+    <h2>&#x26a1; Flash to Daisy</h2>
+    <div class="dfu-instructions">
+      <strong>1.</strong> Put Daisy in DFU mode: hold <strong>BOOT</strong>, tap <strong>RESET</strong><br>
+      <strong>2.</strong> Click the device in Chrome's USB dialog<br>
+      <strong>3.</strong> Wait for flash to complete
+    </div>
+    <div class="dfu-progress">
+      <div class="dfu-progress-bar">
+        <div class="dfu-progress-fill" id="dfu-progress-fill"></div>
+      </div>
+    </div>
+    <div class="dfu-log" id="dfu-log"></div>
+    <div class="modal-buttons" style="margin-top: 16px;">
+      <button class="btn" id="btn-close-dfu">Close</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+<script>
+// Register ServiceWorker for compiler binary caching
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
