@@ -6,6 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc-arm-none-eabi \
     libnewlib-arm-none-eabi \
+    libstdc++-arm-none-eabi-newlib \
     build-essential \
     git \
     ca-certificates \
@@ -29,6 +30,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc-arm-none-eabi \
     libnewlib-arm-none-eabi \
+    libstdc++-arm-none-eabi-newlib \
     build-essential \
     python3 \
     python3-pip \
