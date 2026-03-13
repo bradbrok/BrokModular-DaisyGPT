@@ -192,6 +192,33 @@
           </div>
         </div>
 
+        <!-- Audio In -->
+        <div class="audio-in-group">
+          <div class="audio-in-header">
+            <span class="audio-in-title">Audio In</span>
+            <select id="audio-in-source">
+              <option value="none">None</option>
+              <option value="live">Mic / Line In</option>
+              <option value="sample">Sample</option>
+            </select>
+          </div>
+          <div class="audio-in-live hidden" id="live-controls">
+            <select id="audio-in-device"><option value="">Select device...</option></select>
+          </div>
+          <div class="audio-in-sample hidden" id="sample-controls">
+            <input type="file" id="sample-file-input" accept="audio/*" class="hidden">
+            <button class="btn" id="btn-load-sample">Load Sample</button>
+            <span class="sample-file-name" id="sample-file-name">No file loaded</span>
+            <div class="sample-transport">
+              <button class="btn" id="btn-sample-play" disabled>Play</button>
+              <button class="btn btn-sample-loop active" id="btn-sample-loop" title="Loop">Loop</button>
+            </div>
+            <div class="sample-position-container">
+              <div class="sample-position-bar" id="sample-position-bar"></div>
+            </div>
+          </div>
+        </div>
+
         <!-- Compiler -->
         <div class="compiler-group">
           <button class="btn btn-compile" id="btn-compile" disabled>Compile C++</button>

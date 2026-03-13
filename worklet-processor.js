@@ -15,6 +15,15 @@ class DaisyProcessor extends AudioWorkletProcessor {
     this.pitchBend = 0;
     this.midiGate = false;
 
+    // Audio input state
+    this.inputMode = 'none'; // 'none' | 'live' | 'sample'
+    this.sampleBufferL = null;
+    this.sampleBufferR = null;
+    this.samplePosition = 0;
+    this.sampleLength = 0;
+    this.sampleLoop = true;
+    this.samplePlaying = false;
+
     this.port.onmessage = (e) => {
       const { type } = e.data;
 
@@ -53,6 +62,27 @@ class DaisyProcessor extends AudioWorkletProcessor {
           this.wasmInstance.exports.setKnob(e.data.knobIndex, e.data.value);
         }
         this.port.postMessage({ type: 'midi-cc-applied', knobIndex: e.data.knobIndex, value: e.data.value });
+      } else if (type === 'set-input-mode') {
+        this.inputMode = e.data.mode;
+        if (e.data.mode !== 'sample') {
+          this.samplePlaying = false;
+        }
+      } else if (type === 'load-sample') {
+        this.sampleBufferL = e.data.left;
+        this.sampleBufferR = e.data.right;
+        this.sampleLength = e.data.left.length;
+        this.samplePosition = 0;
+        this.samplePlaying = false;
+      } else if (type === 'sample-play') {
+        if (this.sampleBufferL) {
+          this.samplePlaying = true;
+          if (e.data.fromStart) this.samplePosition = 0;
+        }
+      } else if (type === 'sample-stop') {
+        this.samplePlaying = false;
+        this.samplePosition = 0;
+      } else if (type === 'sample-loop') {
+        this.sampleLoop = e.data.loop;
       } else if (type === 'stop') {
         this.ready = false;
         this.wasmInstance = null;
@@ -226,22 +256,62 @@ class DaisyProcessor extends AudioWorkletProcessor {
       return true;
     }
 
+    // Gather input audio from live input or sample buffer
+    const input = inputs[0];
+    const inL = (input && input.length > 0) ? input[0] : null;
+    const inR = (input && input.length > 1) ? input[1] : inL;
+
     try {
       const exports = this.wasmInstance.exports;
 
       if (exports.processBlock) {
-        // Preferred: block-based processing
-        // Allocate temp buffers in WASM memory
-        const memory = exports.memory || this.wasmInstance.exports.__indirect_function_table;
-        const bufferL = exports.getOutputBufferL ? exports.getOutputBufferL() : 0;
-        const bufferR = exports.getOutputBufferR ? exports.getOutputBufferR() : 0;
+        // Block-based processing — write input into WASM memory
+        const inBufLPtr = exports.getInputBufferL ? exports.getInputBufferL() : 0;
+        const inBufRPtr = exports.getInputBufferR ? exports.getInputBufferR() : 0;
+        const outBufLPtr = exports.getOutputBufferL ? exports.getOutputBufferL() : 0;
+        const outBufRPtr = exports.getOutputBufferR ? exports.getOutputBufferR() : 0;
+
+        if (inBufLPtr && exports.memory) {
+          const wasmMem = new Float32Array(exports.memory.buffer);
+          const inOffL = inBufLPtr / 4;
+          const inOffR = inBufRPtr / 4;
+
+          if (this.inputMode === 'live' && inL) {
+            for (let i = 0; i < blockSize; i++) {
+              wasmMem[inOffL + i] = inL[i];
+              wasmMem[inOffR + i] = inR ? inR[i] : inL[i];
+            }
+          } else if (this.inputMode === 'sample' && this.samplePlaying && this.sampleBufferL) {
+            for (let i = 0; i < blockSize; i++) {
+              if (this.samplePosition < this.sampleLength) {
+                wasmMem[inOffL + i] = this.sampleBufferL[this.samplePosition];
+                wasmMem[inOffR + i] = this.sampleBufferR[this.samplePosition];
+                this.samplePosition++;
+              } else if (this.sampleLoop) {
+                this.samplePosition = 0;
+                wasmMem[inOffL + i] = this.sampleBufferL[0];
+                wasmMem[inOffR + i] = this.sampleBufferR[0];
+                this.samplePosition++;
+              } else {
+                wasmMem[inOffL + i] = 0;
+                wasmMem[inOffR + i] = 0;
+                this.samplePlaying = false;
+              }
+            }
+          } else {
+            for (let i = 0; i < blockSize; i++) {
+              wasmMem[inOffL + i] = 0;
+              wasmMem[inOffR + i] = 0;
+            }
+          }
+        }
 
         exports.processBlock(blockSize);
 
-        if (bufferL && exports.memory) {
+        if (outBufLPtr && exports.memory) {
           const wasmMem = new Float32Array(exports.memory.buffer);
-          const offsetL = bufferL / 4;
-          const offsetR = bufferR / 4;
+          const offsetL = outBufLPtr / 4;
+          const offsetR = outBufRPtr / 4;
           for (let i = 0; i < blockSize; i++) {
             outL[i] = wasmMem[offsetL + i];
             outR[i] = wasmMem[offsetR + i];
@@ -249,7 +319,29 @@ class DaisyProcessor extends AudioWorkletProcessor {
         }
       } else if (exports.processSample) {
         // Sample-by-sample fallback
+        const hasSetInput = !!exports.setInputSample;
         for (let i = 0; i < blockSize; i++) {
+          if (hasSetInput) {
+            let inSampleL = 0, inSampleR = 0;
+            if (this.inputMode === 'live' && inL) {
+              inSampleL = inL[i];
+              inSampleR = inR ? inR[i] : inL[i];
+            } else if (this.inputMode === 'sample' && this.samplePlaying && this.sampleBufferL) {
+              if (this.samplePosition < this.sampleLength) {
+                inSampleL = this.sampleBufferL[this.samplePosition];
+                inSampleR = this.sampleBufferR[this.samplePosition];
+                this.samplePosition++;
+              } else if (this.sampleLoop) {
+                this.samplePosition = 0;
+                inSampleL = this.sampleBufferL[0];
+                inSampleR = this.sampleBufferR[0];
+                this.samplePosition++;
+              } else {
+                this.samplePlaying = false;
+              }
+            }
+            exports.setInputSample(inSampleL, inSampleR);
+          }
           const sample = exports.processSample();
           outL[i] = sample;
           outR[i] = sample;
@@ -273,6 +365,16 @@ class DaisyProcessor extends AudioWorkletProcessor {
       }
       this.rmsLevel = Math.sqrt(sum / outL.length);
       this.port.postMessage({ type: 'rms', level: this.rmsLevel });
+
+      // Report sample position for UI progress bar
+      if (this.inputMode === 'sample' && this.sampleLength > 0) {
+        this.port.postMessage({
+          type: 'sample-position',
+          position: this.samplePosition,
+          length: this.sampleLength,
+          playing: this.samplePlaying,
+        });
+      }
     }
 
     return true;

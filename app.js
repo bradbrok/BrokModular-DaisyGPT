@@ -50,6 +50,16 @@ const state = {
   activeTab: 'chat',
   // File viewer state
   viewingFile: null,
+  // Audio input
+  audioInputMode: 'none',
+  audioInputStream: null,
+  audioInputSourceNode: null,
+  sampleBuffer: null,
+  sampleFileName: '',
+  samplePosition: 0,
+  sampleLength: 0,
+  samplePlaying: false,
+  sampleLoop: true,
 };
 
 // ─── DOM References ────────────────────────────────────────────────
@@ -1069,6 +1079,204 @@ function f32(value) {
   return [...new Uint8Array(buf)];
 }
 
+// ─── Audio Input ──────────────────────────────────────────────────
+
+function switchAudioInputMode(mode) {
+  disconnectAudioInput();
+  state.audioInputMode = mode;
+
+  const liveEl = document.getElementById('live-controls');
+  const sampleEl = document.getElementById('sample-controls');
+  if (liveEl) liveEl.classList.toggle('hidden', mode !== 'live');
+  if (sampleEl) sampleEl.classList.toggle('hidden', mode !== 'sample');
+
+  if (state.workletNode) {
+    state.workletNode.port.postMessage({ type: 'set-input-mode', mode });
+  }
+
+  if (mode === 'live') {
+    enumerateAudioInputDevices();
+  }
+}
+
+async function enumerateAudioInputDevices() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach(t => t.stop());
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter(d => d.kind === 'audioinput');
+
+    const sel = document.getElementById('audio-in-device');
+    if (!sel) return;
+    // Clear and rebuild options
+    while (sel.options.length > 0) sel.remove(0);
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = 'Select device...';
+    sel.appendChild(defaultOpt);
+    for (const dev of audioInputs) {
+      const opt = document.createElement('option');
+      opt.value = dev.deviceId;
+      opt.textContent = dev.label || ('Mic ' + sel.options.length);
+      sel.appendChild(opt);
+    }
+  } catch (err) {
+    console.warn('Could not enumerate audio devices:', err);
+    setStatus('error', 'Mic access denied: ' + err.message);
+  }
+}
+
+async function selectAudioInputDevice(deviceId) {
+  disconnectAudioInput();
+  if (!deviceId) return;
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: { exact: deviceId } }
+    });
+    state.audioInputStream = stream;
+
+    if (state.audioContext && state.workletNode) {
+      state.audioInputSourceNode = state.audioContext.createMediaStreamSource(stream);
+      state.audioInputSourceNode.connect(state.workletNode);
+    }
+  } catch (err) {
+    console.error('Failed to open audio input:', err);
+    setStatus('error', 'Mic error: ' + err.message);
+  }
+}
+
+function disconnectAudioInput() {
+  if (state.audioInputSourceNode) {
+    try { state.audioInputSourceNode.disconnect(); } catch (e) { /* ignore */ }
+    state.audioInputSourceNode = null;
+  }
+  if (state.audioInputStream) {
+    state.audioInputStream.getTracks().forEach(t => t.stop());
+    state.audioInputStream = null;
+  }
+}
+
+async function loadSampleFile(file) {
+  try {
+    if (!state.audioContext) {
+      state.audioContext = new AudioContext({ sampleRate: 48000 });
+    }
+    const arrayBuf = await file.arrayBuffer();
+    const audioBuf = await state.audioContext.decodeAudioData(arrayBuf);
+
+    const left = audioBuf.getChannelData(0);
+    const right = audioBuf.numberOfChannels > 1 ? audioBuf.getChannelData(1) : left;
+
+    state.sampleBuffer = { left: new Float32Array(left), right: new Float32Array(right) };
+    state.sampleFileName = file.name;
+    state.sampleLength = left.length;
+    state.samplePosition = 0;
+    state.samplePlaying = false;
+
+    const nameEl = document.getElementById('sample-file-name');
+    if (nameEl) nameEl.textContent = file.name;
+    const playBtn = document.getElementById('btn-sample-play');
+    if (playBtn) playBtn.disabled = false;
+
+    if (state.workletNode) {
+      state.workletNode.port.postMessage({
+        type: 'load-sample',
+        left: state.sampleBuffer.left,
+        right: state.sampleBuffer.right,
+      });
+    }
+  } catch (err) {
+    console.error('Failed to load sample:', err);
+    setStatus('error', 'Sample load error: ' + err.message);
+  }
+}
+
+function connectAudioInputToWorklet() {
+  if (state.audioInputMode === 'live' && state.audioInputStream && state.audioContext && state.workletNode) {
+    state.audioInputSourceNode = state.audioContext.createMediaStreamSource(state.audioInputStream);
+    state.audioInputSourceNode.connect(state.workletNode);
+  }
+
+  if (state.workletNode) {
+    state.workletNode.port.postMessage({ type: 'set-input-mode', mode: state.audioInputMode });
+
+    if (state.audioInputMode === 'sample' && state.sampleBuffer) {
+      state.workletNode.port.postMessage({
+        type: 'load-sample',
+        left: state.sampleBuffer.left,
+        right: state.sampleBuffer.right,
+      });
+      if (state.samplePlaying) {
+        state.workletNode.port.postMessage({ type: 'sample-play', fromStart: false });
+      }
+    }
+
+    state.workletNode.port.postMessage({ type: 'sample-loop', loop: state.sampleLoop });
+  }
+}
+
+function updateSamplePositionUI(position, length) {
+  const bar = document.getElementById('sample-position-bar');
+  if (bar && length > 0) {
+    bar.style.width = ((position / length) * 100).toFixed(1) + '%';
+  }
+}
+
+function initAudioInput() {
+  const srcSel = document.getElementById('audio-in-source');
+  if (srcSel) srcSel.addEventListener('change', (e) => switchAudioInputMode(e.target.value));
+
+  const devSel = document.getElementById('audio-in-device');
+  if (devSel) devSel.addEventListener('change', (e) => selectAudioInputDevice(e.target.value));
+
+  const loadBtn = document.getElementById('btn-load-sample');
+  const fileInput = document.getElementById('sample-file-input');
+  if (loadBtn && fileInput) {
+    loadBtn.addEventListener('click', () => fileInput.click());
+  }
+  if (fileInput) {
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) loadSampleFile(file);
+    });
+  }
+
+  const playBtn = document.getElementById('btn-sample-play');
+  if (playBtn) {
+    playBtn.addEventListener('click', () => {
+      state.samplePlaying = !state.samplePlaying;
+      if (state.workletNode) {
+        if (state.samplePlaying) {
+          state.workletNode.port.postMessage({ type: 'sample-play', fromStart: false });
+        } else {
+          state.workletNode.port.postMessage({ type: 'sample-stop' });
+        }
+      }
+      updateSampleTransportUI();
+    });
+  }
+
+  const loopBtn = document.getElementById('btn-sample-loop');
+  if (loopBtn) {
+    loopBtn.addEventListener('click', () => {
+      state.sampleLoop = !state.sampleLoop;
+      loopBtn.classList.toggle('active', state.sampleLoop);
+      if (state.workletNode) {
+        state.workletNode.port.postMessage({ type: 'sample-loop', loop: state.sampleLoop });
+      }
+    });
+  }
+}
+
+function updateSampleTransportUI() {
+  const playBtn = document.getElementById('btn-sample-play');
+  if (playBtn) {
+    playBtn.textContent = state.samplePlaying ? 'Stop' : 'Play';
+  }
+}
+
 // ─── Audio Engine ──────────────────────────────────────────────────
 
 async function startAudio() {
@@ -1087,6 +1295,7 @@ async function startAudio() {
     await state.audioContext.audioWorklet.addModule('worklet-processor.js');
 
     state.workletNode = new AudioWorkletNode(state.audioContext, 'daisy-processor', {
+      numberOfInputs: 1,
       outputChannelCount: [2],
     });
 
@@ -1097,6 +1306,14 @@ async function startAudio() {
       } else if (e.data.type === 'ready') {
         for (let i = 0; i < 4; i++) {
           state.workletNode.port.postMessage({ type: 'set-knob', index: i, value: state.knobs[i] });
+        }
+      } else if (e.data.type === 'sample-position') {
+        state.samplePosition = e.data.position;
+        state.samplePlaying = e.data.playing;
+        updateSamplePositionUI(e.data.position, e.data.length);
+        if (!e.data.playing && state.samplePlaying) {
+          state.samplePlaying = false;
+          updateSampleTransportUI();
         }
       } else if (e.data.type === 'error') {
         console.error('Worklet error:', e.data.message);
@@ -1111,6 +1328,9 @@ async function startAudio() {
       wasmBytes: state.wasmBytes,
     });
 
+    // Re-connect audio input sources to the new worklet
+    connectAudioInputToWorklet();
+
     state.isPlaying = true;
     updateUI();
   } catch (err) {
@@ -1121,6 +1341,12 @@ async function startAudio() {
 
 function stopAudio() {
   if (!state.isPlaying) return;
+
+  // Disconnect source node but keep stream alive for re-use
+  if (state.audioInputSourceNode) {
+    try { state.audioInputSourceNode.disconnect(); } catch (e) { /* ignore */ }
+    state.audioInputSourceNode = null;
+  }
 
   if (state.workletNode) {
     state.workletNode.port.postMessage({ type: 'stop' });
@@ -2088,6 +2314,9 @@ function init() {
 
   // Code panel & tabs
   initCodePanel();
+
+  // Audio Input Setup
+  initAudioInput();
 
   // MIDI Setup
   initMIDI();

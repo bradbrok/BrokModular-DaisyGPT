@@ -2,12 +2,10 @@
 // Browser WASM wrapper suffix — provides extern "C" exports for AudioWorklet
 // These functions are called by worklet-processor.js
 
-static float _in_buf_l[1] = {0.0f};
-static float _in_buf_r[1] = {0.0f};
-static const float* _in_ptrs[2] = {_in_buf_l, _in_buf_r};
-static float _out_buf_l[1] = {0.0f};
-static float _out_buf_r[1] = {0.0f};
-static float* _out_ptrs[2] = {_out_buf_l, _out_buf_r};
+static float _wbuf_in[4][256]  = {};
+static const float* _wbuf_inPtrs[4]  = {_wbuf_in[0], _wbuf_in[1], _wbuf_in[2], _wbuf_in[3]};
+static float _wbuf_out[4][256] = {};
+static float* _wbuf_outPtrs[4] = {_wbuf_out[0], _wbuf_out[1], _wbuf_out[2], _wbuf_out[3]};
 
 extern "C" {
 
@@ -17,14 +15,33 @@ void init(float sr) {
 }
 
 float processSample() {
-    _out_buf_l[0] = 0.0f;
-    _out_buf_r[0] = 0.0f;
+    for (int i = 0; i < 4; i++) _wbuf_out[i][0] = 0.0f;
     AudioCallback(
-        (daisy::AudioHandle::InputBuffer)_in_ptrs,
-        (daisy::AudioHandle::OutputBuffer)_out_ptrs,
+        (daisy::AudioHandle::InputBuffer)_wbuf_inPtrs,
+        (daisy::AudioHandle::OutputBuffer)_wbuf_outPtrs,
         1
     );
-    return _out_buf_l[0];
+    return _wbuf_out[0][0];
+}
+
+void setInputSample(float left, float right) {
+    _wbuf_in[0][0] = left;
+    _wbuf_in[1][0] = right;
+}
+
+float* getInputBufferL()  { return _wbuf_in[0]; }
+float* getInputBufferR()  { return _wbuf_in[1]; }
+float* getOutputBufferL() { return _wbuf_out[0]; }
+float* getOutputBufferR() { return _wbuf_out[1]; }
+
+void processBlock(int size) {
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < size; j++) _wbuf_out[i][j] = 0.0f;
+    AudioCallback(
+        (daisy::AudioHandle::InputBuffer)_wbuf_inPtrs,
+        (daisy::AudioHandle::OutputBuffer)_wbuf_outPtrs,
+        size
+    );
 }
 
 void setKnob(int index, float value) {
