@@ -4,7 +4,7 @@
 import { skills, skillNames } from './skills/index.js';
 import { DAISYSP_REFERENCE } from './reference/daisysp_ref.js';
 import { DaisyDFU, isWebUSBSupported, isChromeBrowser } from './dfu.js';
-import { PROVIDERS, getApiKey, setApiKey, migrateOldKey } from './providers.js';
+import { PROVIDERS, getApiKey, setApiKey, migrateOldKey, getOllamaUrl, setOllamaUrl } from './providers.js';
 import { MIDIController } from './midi.js';
 import { WasmClangCompiler } from './compiler.js';
 
@@ -119,6 +119,7 @@ ${DAISYSP_REFERENCE}`;
 // ─── Chat / LLM ───────────────────────────────────────────────────
 
 function currentApiKey() {
+  if (state.provider === 'ollama') return 'ollama';
   return getApiKey(state.provider);
 }
 
@@ -1246,7 +1247,18 @@ function populateModelDropdown() {
   const provider = PROVIDERS[state.provider];
   if (!provider) return;
 
-  select.innerHTML = '';
+  // For Ollama, fetch models dynamically if list is empty
+  if (state.provider === 'ollama' && provider.models.length === 0) {
+    clearSelectOptions(select);
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'Loading models...';
+    select.appendChild(opt);
+    refreshOllamaModels();
+    return;
+  }
+
+  clearSelectOptions(select);
   for (const m of provider.models) {
     const opt = document.createElement('option');
     opt.value = m.id;
@@ -1257,10 +1269,58 @@ function populateModelDropdown() {
   const hasModel = provider.models.some(m => m.id === state.model);
   if (hasModel) {
     select.value = state.model;
-  } else {
+  } else if (provider.models.length > 0) {
     state.model = provider.models[0].id;
     select.value = state.model;
     localStorage.setItem('daisy-gpt-model', state.model);
+  }
+}
+
+function clearSelectOptions(select) {
+  while (select.firstChild) select.removeChild(select.firstChild);
+}
+
+async function refreshOllamaModels() {
+  const provider = PROVIDERS.ollama;
+  const select = $('#model-select');
+  const status = $('#key-status-ollama');
+
+  try {
+    await provider.fetchModels();
+    if (state.provider === 'ollama' && select) {
+      clearSelectOptions(select);
+      for (const m of provider.models) {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.label;
+        select.appendChild(opt);
+      }
+      const hasModel = provider.models.some(m => m.id === state.model);
+      if (hasModel) {
+        select.value = state.model;
+      } else if (provider.models.length > 0) {
+        state.model = provider.models[0].id;
+        select.value = state.model;
+        localStorage.setItem('daisy-gpt-model', state.model);
+      }
+    }
+    if (status) {
+      status.textContent = '\u2713';
+      status.style.color = 'var(--accent-gold)';
+    }
+  } catch (e) {
+    if (select && state.provider === 'ollama') {
+      clearSelectOptions(select);
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No models found';
+      select.appendChild(opt);
+    }
+    if (status) {
+      status.textContent = '\u2717';
+      status.style.color = 'var(--accent-red)';
+    }
+    setStatus('error', e.message);
   }
 }
 
@@ -1270,13 +1330,21 @@ function showApiKeyModal() {
   const modal = $('#api-key-modal');
   if (modal) {
     modal.classList.remove('hidden');
-    for (const [id, provider] of Object.entries(PROVIDERS)) {
+    for (const [id] of Object.entries(PROVIDERS)) {
       const input = $(`#key-${id}`);
       if (input) input.value = getApiKey(id);
       const status = $(`#key-status-${id}`);
       if (status) status.textContent = getApiKey(id) ? '\u2713' : '';
     }
-    $(`#key-${state.provider}`)?.focus();
+    // Ollama URL field
+    const ollamaUrlInput = $('#ollama-url');
+    if (ollamaUrlInput) ollamaUrlInput.value = getOllamaUrl();
+
+    if (state.provider === 'ollama') {
+      ollamaUrlInput?.focus();
+    } else {
+      $(`#key-${state.provider}`)?.focus();
+    }
   }
 }
 
@@ -1290,13 +1358,37 @@ function saveAllKeys() {
     const input = $(`#key-${id}`);
     if (input) setApiKey(id, input.value.trim());
   }
+  // Save Ollama URL
+  const ollamaUrlInput = $('#ollama-url');
+  if (ollamaUrlInput) {
+    setOllamaUrl(ollamaUrlInput.value.trim() || 'http://localhost:11434');
+  }
   hideApiKeyModal();
 }
 
 async function testProviderKey(providerId) {
-  const input = $(`#key-${providerId}`);
   const status = $(`#key-status-${providerId}`);
-  if (!input || !status) return;
+  if (!status) return;
+
+  // Ollama: test connectivity, no API key needed
+  if (providerId === 'ollama') {
+    const urlInput = $('#ollama-url');
+    if (urlInput) setOllamaUrl(urlInput.value.trim() || 'http://localhost:11434');
+    status.textContent = '...';
+    try {
+      await PROVIDERS.ollama.test();
+      status.textContent = '\u2713';
+      status.style.color = 'var(--accent-gold)';
+    } catch (e) {
+      status.textContent = '\u2717';
+      status.style.color = 'var(--accent-red)';
+      setStatus('error', e.message);
+    }
+    return;
+  }
+
+  const input = $(`#key-${providerId}`);
+  if (!input) return;
 
   const key = input.value.trim();
   if (!key) { status.textContent = '\u2717'; return; }
@@ -1860,8 +1952,17 @@ function init() {
 
   // Test buttons
   for (const btn of $$('.btn-test')) {
+    if (btn.id === 'btn-refresh-ollama') continue; // handled separately
     btn.addEventListener('click', () => testProviderKey(btn.dataset.provider));
   }
+
+  // Ollama refresh models button
+  $('#btn-refresh-ollama')?.addEventListener('click', async () => {
+    const urlInput = $('#ollama-url');
+    if (urlInput) setOllamaUrl(urlInput.value.trim() || 'http://localhost:11434');
+    PROVIDERS.ollama.models = [];
+    await refreshOllamaModels();
+  });
 
   // History
   $('#btn-history')?.addEventListener('click', showHistory);

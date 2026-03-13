@@ -1,5 +1,7 @@
 // daisy-gpt — multi-provider LLM support
-// Anthropic, OpenAI (Responses API), OpenRouter (Chat Completions)
+// Anthropic, OpenAI (Responses API), OpenRouter (Chat Completions), Ollama (Local)
+
+const OLLAMA_CORS_HINT = 'Cannot reach Ollama. Make sure it\'s running and started with OLLAMA_ORIGINS=* for browser access.';
 
 export const PROVIDERS = {
   anthropic: {
@@ -280,6 +282,107 @@ export const PROVIDERS = {
       if (!response.ok) throw new Error(`${response.status}`);
     },
   },
+
+  ollama: {
+    name: 'Ollama (Local)',
+    keySlot: 'daisy-gpt-ollama-key',
+    models: [],
+
+    getBaseUrl() {
+      return localStorage.getItem('daisy-gpt-ollama-url') || 'http://localhost:11434';
+    },
+
+    async fetchModels() {
+      let response;
+      try {
+        response = await fetch(`${this.getBaseUrl()}/api/tags`);
+      } catch (e) {
+        throw new Error(OLLAMA_CORS_HINT);
+      }
+      if (!response.ok) throw new Error(`Ollama error ${response.status}`);
+      const data = await response.json();
+      const models = data.models || [];
+      if (models.length === 0) {
+        throw new Error('Ollama is running but has no models. Run: ollama pull llama3.1');
+      }
+      this.models = models.map(m => {
+        const size = m.details?.parameter_size || '';
+        const quant = m.details?.quantization_level || '';
+        const extra = [size, quant].filter(Boolean).join(' ');
+        return {
+          id: m.name,
+          label: extra ? `${m.name} (${extra})` : m.name,
+        };
+      });
+      return this.models;
+    },
+
+    async call(apiKey, model, systemPrompt, messages, onToken, signal) {
+      const chatMessages = [
+        { role: 'system', content: systemPrompt },
+        ...messages,
+      ];
+
+      let response;
+      try {
+        response = await fetch(`${this.getBaseUrl()}/v1/chat/completions`, {
+          method: 'POST',
+          signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            messages: chatMessages,
+            stream: true,
+          }),
+        });
+      } catch (e) {
+        if (e.name === 'AbortError') throw e;
+        throw new Error(OLLAMA_CORS_HINT);
+      }
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error?.message || `Ollama error ${response.status}`);
+      }
+
+      await readSSE(response, (event) => {
+        const content = event.choices?.[0]?.delta?.content;
+        if (content) onToken(content);
+      });
+    },
+
+    async callSync(apiKey, model, systemPrompt, messages) {
+      const chatMessages = [
+        { role: 'system', content: systemPrompt },
+        ...messages,
+      ];
+
+      let response;
+      try {
+        response = await fetch(`${this.getBaseUrl()}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, messages: chatMessages }),
+        });
+      } catch (e) {
+        throw new Error(OLLAMA_CORS_HINT);
+      }
+
+      if (!response.ok) throw new Error(`Ollama error ${response.status}`);
+      const data = await response.json();
+      return data.choices?.[0]?.message?.content || '';
+    },
+
+    async test() {
+      let response;
+      try {
+        response = await fetch(`${this.getBaseUrl()}/api/tags`);
+      } catch (e) {
+        throw new Error(OLLAMA_CORS_HINT);
+      }
+      if (!response.ok) throw new Error(`Ollama error ${response.status}`);
+    },
+  },
 };
 
 // Shared SSE reader
@@ -322,6 +425,15 @@ export function setApiKey(providerId, key) {
   const provider = PROVIDERS[providerId];
   if (!provider) return;
   localStorage.setItem(provider.keySlot, key);
+}
+
+// Ollama URL helpers
+export function getOllamaUrl() {
+  return localStorage.getItem('daisy-gpt-ollama-url') || 'http://localhost:11434';
+}
+
+export function setOllamaUrl(url) {
+  localStorage.setItem('daisy-gpt-ollama-url', url.replace(/\/+$/, ''));
 }
 
 // Migrate old single key to anthropic slot

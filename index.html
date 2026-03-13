@@ -28,6 +28,7 @@
         <option value="anthropic">Anthropic</option>
         <option value="openai">OpenAI</option>
         <option value="openrouter">OpenRouter</option>
+        <option value="ollama">Ollama (Local)</option>
       </select>
       <select id="model-select"></select>
       <div class="thinking-controls" id="thinking-controls">
@@ -252,6 +253,17 @@
         <button class="btn btn-test" data-provider="openrouter">Test</button>
         <span class="key-status" id="key-status-openrouter"></span>
       </div>
+    </div>
+
+    <div class="key-row" id="ollama-config-row">
+      <label>Ollama</label>
+      <div class="key-input-row">
+        <input type="text" id="ollama-url" placeholder="http://localhost:11434">
+        <button class="btn btn-test" data-provider="ollama">Test</button>
+        <button class="btn btn-test" id="btn-refresh-ollama" title="Refresh models">&#x21bb;</button>
+        <span class="key-status" id="key-status-ollama"></span>
+      </div>
+      <div class="ollama-hint">No API key needed. Start Ollama with <code>OLLAMA_ORIGINS=*</code> for browser access.</div>
     </div>
 
     <div class="modal-buttons">

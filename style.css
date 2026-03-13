@@ -1356,6 +1356,19 @@ input[type="range"]::-webkit-slider-thumb:active {
   text-align: center;
 }
 
+.ollama-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.ollama-hint code {
+  background: var(--bg-input);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
 /* History panel */
 .history-overlay {
   position: fixed;
