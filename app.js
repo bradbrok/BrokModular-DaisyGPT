@@ -2119,6 +2119,16 @@ function syncCodeToEditor() {
     const statusEl = $('#code-editor-status');
     if (statusEl) statusEl.textContent = 'patch.cpp';
   }
+  updateCodeHighlight();
+}
+
+function updateCodeHighlight() {
+  const codeEl = $('#code-highlight-code');
+  if (!codeEl) return;
+  const text = state.code || '';
+  // Append a newline so the pre/code height always matches the textarea
+  codeEl.textContent = text + (text.endsWith('\n') ? ' ' : '\n');
+  if (window.hljs) hljs.highlightElement(codeEl);
 }
 
 function syncEditorToCode() {
@@ -2272,6 +2282,12 @@ function openFileViewer(path) {
     editor.readOnly = true;
   }
   if (statusEl) statusEl.textContent = path + ' (read-only)';
+  // Highlight the file content
+  const codeEl = $('#code-highlight-code');
+  if (codeEl) {
+    codeEl.textContent = entry.content + '\n';
+    if (window.hljs) hljs.highlightElement(codeEl);
+  }
   switchTab('code');
 }
 
@@ -2312,10 +2328,20 @@ function initCodePanel() {
 
   // Code editor sync and cursor position
   const editor = $('#code-editor');
+  const highlight = $('#code-highlight');
   if (editor) {
     editor.addEventListener('input', () => {
       if (!editor.readOnly) {
         syncEditorToCode();
+        updateCodeHighlight();
+      }
+    });
+
+    // Sync scroll between textarea and highlight overlay
+    editor.addEventListener('scroll', () => {
+      if (highlight) {
+        highlight.scrollTop = editor.scrollTop;
+        highlight.scrollLeft = editor.scrollLeft;
       }
     });
 
