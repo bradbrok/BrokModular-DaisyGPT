@@ -14,9 +14,6 @@ OPT = -O2
 # Sources
 CPP_SOURCES = patch.cpp
 
-# DaisySP library sources included via static lib
-LIBS = -ldaisysp -ldaisy -lc -lm -lnosys
-
 # Toolchain
 PREFIX = arm-none-eabi-
 CC = $(PREFIX)gcc
@@ -40,14 +37,21 @@ else
   BOOT_ADDRESS = 0x08000000
 endif
 
-# Include paths
+# Include paths (matching libDaisy's own Makefile structure)
 C_INCLUDES = \
   -I$(LIBDAISY_DIR)/src \
-  -I$(LIBDAISY_DIR)/src/daisy_patch.h \
-  -I$(LIBDAISY_DIR)/Drivers/CMSIS/Include \
-  -I$(LIBDAISY_DIR)/Drivers/CMSIS/Device/ST/STM32H7xx/Include \
+  -I$(LIBDAISY_DIR)/src/sys \
+  -I$(LIBDAISY_DIR)/src/usbd \
+  -I$(LIBDAISY_DIR)/src/usbh \
+  -I$(LIBDAISY_DIR)/Drivers/CMSIS_5/CMSIS/Core/Include \
+  -I$(LIBDAISY_DIR)/Drivers/CMSIS-Device/ST/STM32H7xx/Include \
   -I$(LIBDAISY_DIR)/Drivers/STM32H7xx_HAL_Driver/Inc \
+  -I$(LIBDAISY_DIR)/Drivers/STM32H7xx_HAL_Driver/Inc/Legacy \
   -I$(LIBDAISY_DIR)/Middlewares/ST/STM32_USB_Device_Library/Core/Inc \
+  -I$(LIBDAISY_DIR)/Middlewares/Patched/ST/STM32_USB_Device_Library/Class/CDC/Inc \
+  -I$(LIBDAISY_DIR)/Middlewares/ST/STM32_USB_Host_Library/Core/Inc \
+  -I$(LIBDAISY_DIR)/Middlewares/ST/STM32_USB_Host_Library/Class/MSC/Inc \
+  -I$(LIBDAISY_DIR)/Middlewares/Third_Party/FatFs/src \
   -I$(LIBDAISY_DIR)/core \
   -I$(DAISYSP_DIR)/Source
 
@@ -59,12 +63,17 @@ LIBDIR = \
 # Compile flags
 CXXFLAGS = $(MCU) $(OPT) -Wall -fdata-sections -ffunction-sections -fno-exceptions -fno-rtti
 CXXFLAGS += $(C_INCLUDES)
-CXXFLAGS += -DSTM32H750xx -DUSE_HAL_DRIVER
+CXXFLAGS += -DCORE_CM7 -DSTM32H750xx -DSTM32H750IB -DARM_MATH_CM7 -DUSE_HAL_DRIVER -DUSE_FULL_LL_DRIVER
+CXXFLAGS += -DHSE_VALUE=16000000 -DDATA_IN_D2_SRAM
+CXXFLAGS += -std=gnu++14 -Wno-register
+
+ASFLAGS = $(MCU) -Wall -fdata-sections -ffunction-sections
 
 # Linker flags
 LDFLAGS = $(MCU) -specs=nano.specs -specs=nosys.specs
 LDFLAGS += -T$(LDSCRIPT)
-LDFLAGS += $(LIBDIR) $(LIBS)
+LDFLAGS += $(LIBDIR)
+LDFLAGS += -ldaisysp -ldaisy -lc -lm -lnosys
 LDFLAGS += -Wl,--gc-sections
 LDFLAGS += -Wl,-Map=build/$(TARGET).map,--cref
 
@@ -74,13 +83,16 @@ BUILD_DIR = build
 # Object files
 OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(CPP_SOURCES:.cpp=.o)))
 
-# Startup file from libDaisy
-OBJECTS += $(LIBDAISY_DIR)/core/startup_stm32h750xx.o
+# Assemble startup file locally (source is in /opt/daisy, build locally)
+OBJECTS += $(BUILD_DIR)/startup_stm32h750xx.o
 
 all: $(BUILD_DIR)/$(TARGET).bin
 
 $(BUILD_DIR)/%.o: %.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/startup_stm32h750xx.o: $(LIBDAISY_DIR)/core/startup_stm32h750xx.s | $(BUILD_DIR)
+	$(AS) $(ASFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS)
 	$(CXX) $(OBJECTS) $(LDFLAGS) -o $@
