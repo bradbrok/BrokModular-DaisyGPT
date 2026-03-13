@@ -543,21 +543,7 @@ function finalizeAssistantBubble(msgEl, fullText) {
       setTimeout(() => copyBtn.textContent = 'Copy', 1500);
     });
 
-    const useBtn = document.createElement('button');
-    useBtn.textContent = 'Use this code';
-    useBtn.addEventListener('click', () => {
-      state.previousCode = state.code;
-      state.code = block.textContent;
-      extractKnobLabels(state.code);
-      updateKnobLabels();
-      syncCodeToEditor();
-      switchTab('code');
-      updateUI();
-      compileCode();
-    });
-
     actions.appendChild(copyBtn);
-    actions.appendChild(useBtn);
     block.closest('pre').after(actions);
   });
 
@@ -673,6 +659,11 @@ function extractKnobLabels(code) {
 async function compileCode() {
   if (!state.code) return;
 
+  // Auto-load compiler if not loaded yet
+  if (!state.compiler.loaded && !state.compilerLoading) {
+    await loadCompiler();
+  }
+
   state.isCompiling = true;
   state.compiled = false;
   state.compiledWithClang = false;
@@ -742,12 +733,6 @@ async function loadCompiler() {
     setStatus('success', 'Compiler cached and ready');
     populateFileRegistry();
     updateUI();
-
-    // If we have code that was compiled as preview, recompile with C++
-    if (state.code && state.compiled && !state.compiledWithClang) {
-      state.compileRetries = 0;
-      await compileCode();
-    }
   } catch (err) {
     console.error('Compiler load failed:', err);
     setStatus('error', `Compiler load failed: ${err.message}`);
@@ -2572,12 +2557,9 @@ function init() {
     }
   }
 
-  // Compile button (loads compiler on first click if not loaded)
+  // Compile button
   $('#btn-compile')?.addEventListener('click', async () => {
     if (!state.code) return;
-    if (!state.compiler.loaded) {
-      await loadCompiler();
-    }
     state.compileRetries = 0;
     await compileCode();
   });
