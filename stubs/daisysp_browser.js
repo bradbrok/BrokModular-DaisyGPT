@@ -82,8 +82,11 @@ struct DaisyPatch {
 #include "Utility/dsp.h"
 #include "Synthesis/oscillator.h"
 #include "Synthesis/harmonic_osc.h"
+#include "Synthesis/fm2.h"
 #include "Filters/svf.h"
+#include "Filters/ladder.h"
 #include "Filters/onepole.h"
+#include "Filters/soap.h"
 #include "Control/adsr.h"
 #include "Control/adenv.h"
 #include "Control/phasor.h"
@@ -95,8 +98,27 @@ struct DaisyPatch {
 #include "Utility/smooth_random.h"
 #include "Noise/whitenoise.h"
 #include "Noise/dust.h"
+#include "Noise/clockednoise.h"
 #include "Noise/fractal_noise.h"
+#include "Effects/overdrive.h"
+#include "Effects/decimator.h"
+#include "Effects/sampleratereducer.h"
+#include "Effects/wavefolder.h"
+#include "Effects/tremolo.h"
+#include "Effects/pitchshifter.h"
+#include "Drums/analogbassdrum.h"
+#include "Drums/analogsnaredrum.h"
+#include "Drums/synthbassdrum.h"
+#include "Drums/synthsnaredrum.h"
+#include "Drums/hihat.h"
+#include "PhysicalModeling/KarplusString.h"
+#include "PhysicalModeling/stringvoice.h"
+#include "PhysicalModeling/modalvoice.h"
+#include "PhysicalModeling/resonator.h"
+#include "PhysicalModeling/drip.h"
 #include "Dynamics/crossfade.h"
+#include "Dynamics/limiter.h"
+#include "Sampling/granularplayer.h"
 `],
 
 // ─── Utility/dsp.h — Core utility functions ─────────────────────────
@@ -1065,6 +1087,901 @@ class CrossFade {
   private:
     float   pos_;
     uint8_t curve_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Filters/ladder.h — Moog ladder filter ──────────────────────────
+['Filters/ladder.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class LadderFilter {
+  public:
+    enum FilterMode { LP24, LP12, BP24, BP12, HP24, HP12 };
+
+    void Init(float sample_rate) {
+        sr_   = sample_rate;
+        freq_ = 1000.0f;
+        res_  = 0.0f;
+        drv_  = 1.0f;
+        pbg_  = 0.5f;
+        mode_ = LP24;
+        for (int i = 0; i < 4; i++) { stage_[i] = 0.0f; delay_[i] = 0.0f; }
+    }
+
+    float Process(float in) {
+        float cutoff = 2.0f * sinf(PI_F * fminf(freq_ / (sr_ * 2.0f), 0.25f));
+        float resonance = res_ * 0.55f;
+        in *= drv_;
+        in = tanhf(in);
+        float feedback = resonance * delay_[3];
+        float input = in - feedback;
+        for (int i = 0; i < 4; i++) {
+            stage_[i] = delay_[i] + cutoff * (tanhf(input) - tanhf(delay_[i]));
+            delay_[i] = stage_[i];
+            input = stage_[i];
+        }
+        switch (mode_) {
+            case LP24: return stage_[3];
+            case LP12: return stage_[1];
+            case BP24: return stage_[1] - stage_[3];
+            case BP12: return stage_[0] - stage_[1];
+            case HP24: return in - stage_[3];
+            case HP12: return in - stage_[1];
+            default:   return stage_[3];
+        }
+    }
+
+    void ProcessBlock(float* buf, size_t size) {
+        for (size_t i = 0; i < size; i++) buf[i] = Process(buf[i]);
+    }
+
+    void SetFreq(float f)            { freq_ = fminf(f, sr_ * 0.45f); }
+    void SetRes(float r)             { res_ = r; }
+    void SetPassbandGain(float pbg)  { pbg_ = pbg; }
+    void SetInputDrive(float drv)    { drv_ = fmaxf(drv, 0.01f); }
+    void SetFilterMode(FilterMode m) { mode_ = m; }
+
+  private:
+    float      sr_, freq_, res_, drv_, pbg_;
+    float      stage_[4], delay_[4];
+    FilterMode mode_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Filters/soap.h — Second-order allpass ───────────────────────────
+['Filters/soap.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class Soap {
+  public:
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        freq_ = 1000.0f; bw_ = 100.0f;
+        d1_ = 0.0f; d2_ = 0.0f;
+        bp_ = 0.0f; br_ = 0.0f;
+    }
+
+    void Process(float in) {
+        float f = 2.0f * sinf(PI_F * fminf(freq_ / sr_, 0.45f));
+        float q = freq_ / fmaxf(bw_, 1.0f);
+        float qinv = 1.0f / fmaxf(q, 0.5f);
+        float hp = in - qinv * d1_ - d2_;
+        float band = f * hp + d1_;
+        float lp = f * band + d2_;
+        d1_ = band; d2_ = lp;
+        bp_ = band; br_ = in - band;
+    }
+
+    void SetCenterFreq(float f)      { freq_ = f; }
+    void SetFilterBandwidth(float b)  { bw_ = b; }
+    float Bandpass() const            { return bp_; }
+    float Bandreject() const          { return br_; }
+
+  private:
+    float sr_, freq_, bw_, d1_, d2_, bp_, br_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Synthesis/fm2.h — 2-operator FM ─────────────────────────────────
+['Synthesis/fm2.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class Fm2 {
+  public:
+    void Init(float samplerate) {
+        sr_ = samplerate;
+        freq_ = 440.0f; ratio_ = 1.0f; idx_ = 1.0f;
+        car_phase_ = 0.0f; mod_phase_ = 0.0f;
+    }
+
+    float Process() {
+        float mod_freq = freq_ * ratio_;
+        mod_phase_ += mod_freq / sr_;
+        if (mod_phase_ >= 1.0f) mod_phase_ -= 1.0f;
+        float mod = sinf(mod_phase_ * TWOPI_F) * idx_ * TWOPI_F;
+        car_phase_ += freq_ / sr_;
+        if (car_phase_ >= 1.0f) car_phase_ -= 1.0f;
+        return sinf(car_phase_ * TWOPI_F + mod);
+    }
+
+    void  SetFrequency(float f) { freq_ = f; }
+    void  SetRatio(float r)     { ratio_ = r; }
+    void  SetIndex(float i)     { idx_ = i; }
+    float GetIndex() const      { return idx_; }
+    void  Reset()               { car_phase_ = 0.0f; mod_phase_ = 0.0f; }
+
+  private:
+    float sr_, freq_, ratio_, idx_;
+    float car_phase_, mod_phase_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Noise/clockednoise.h — Sample-and-hold noise ───────────────────
+['Noise/clockednoise.h', `#pragma once
+#include <cstdint>
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class ClockedNoise {
+  public:
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        freq_ = 1.0f; phase_ = 0.0f; val_ = 0.0f;
+        seed_ = 12345;
+    }
+
+    float Process() {
+        phase_ += freq_ / sr_;
+        if (phase_ >= 1.0f) {
+            phase_ -= 1.0f;
+            seed_ = seed_ * 1103515245 + 12345;
+            val_ = (float)(seed_ >> 16) / 32768.0f - 1.0f;
+        }
+        return val_;
+    }
+
+    void SetFreq(float freq) { freq_ = freq; }
+    void Sync()              { phase_ = 1.0f; }
+
+  private:
+    float   sr_, freq_, phase_, val_;
+    int32_t seed_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Effects/overdrive.h — Distortion ────────────────────────────────
+['Effects/overdrive.h', `#pragma once
+#include <cmath>
+
+namespace daisysp {
+
+class Overdrive {
+  public:
+    void Init()               { drive_ = 0.5f; }
+    void SetDrive(float d)    { drive_ = d; }
+
+    float Process(float in) {
+        float x = in * (1.0f + drive_ * 10.0f);
+        return tanhf(x);
+    }
+
+  private:
+    float drive_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Effects/decimator.h — Bitcrusher/downsampler ────────────────────
+['Effects/decimator.h', `#pragma once
+#include <cmath>
+#include <cstdint>
+
+namespace daisysp {
+
+class Decimator {
+  public:
+    void Init() { sr_factor_ = 1.0f; bits_ = 16.0f; hold_ = 0.0f; count_ = 0; smooth_ = false; }
+
+    float Process(float input) {
+        count_++;
+        if (count_ >= (int)sr_factor_) { count_ = 0; hold_ = input; }
+        float q = powf(2.0f, bits_);
+        return roundf(hold_ * q) / q;
+    }
+
+    void SetDownsampleFactor(float f)     { sr_factor_ = fmaxf(f, 1.0f); }
+    void SetBitcrushFactor(float f)       { bits_ = fmaxf(1.0f, 16.0f * (1.0f - f)); }
+    void SetBitsToCrush(const uint8_t& b) { bits_ = 16.0f - (float)b; }
+    void SetSmoothCrushing(bool s)        { smooth_ = s; }
+
+  private:
+    float sr_factor_, bits_, hold_;
+    int   count_;
+    bool  smooth_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Effects/sampleratereducer.h — Sample rate reduction ─────────────
+['Effects/sampleratereducer.h', `#pragma once
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class SampleRateReducer {
+  public:
+    void Init()            { freq_ = 1.0f; hold_ = 0.0f; phase_ = 0.0f; }
+    void SetFreq(float f)  { freq_ = fmaxf(f, 0.001f); }
+
+    float Process(float in) {
+        phase_ += freq_;
+        if (phase_ >= 1.0f) { phase_ -= 1.0f; hold_ = in; }
+        return hold_;
+    }
+
+  private:
+    float freq_, hold_, phase_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Effects/wavefolder.h — Wavefolding ──────────────────────────────
+['Effects/wavefolder.h', `#pragma once
+
+namespace daisysp {
+
+class Wavefolder {
+  public:
+    void Init()                { gain_ = 1.0f; offset_ = 0.0f; }
+    void SetGain(float g)      { gain_ = g; }
+    void SetOffset(float o)    { offset_ = o; }
+
+    float Process(float in) {
+        float x = (in + offset_) * gain_;
+        while (x > 1.0f)  x = 2.0f - x;
+        while (x < -1.0f) x = -2.0f - x;
+        return x;
+    }
+
+  private:
+    float gain_, offset_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Effects/tremolo.h — Amplitude modulation ────────────────────────
+['Effects/tremolo.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class Tremolo {
+  public:
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        phase_ = 0.0f; freq_ = 5.0f; depth_ = 1.0f;
+        waveform_ = 0;
+    }
+
+    float Process(float in) {
+        phase_ += freq_ / sr_;
+        if (phase_ >= 1.0f) phase_ -= 1.0f;
+        float lfo = (waveform_ == 0)
+            ? (sinf(phase_ * TWOPI_F) * 0.5f + 0.5f)
+            : ((phase_ < 0.5f) ? phase_ * 2.0f : 2.0f - phase_ * 2.0f);
+        return in * (1.0f - depth_ * lfo);
+    }
+
+    void SetFreq(float f)      { freq_ = f; }
+    void SetWaveform(int wf)   { waveform_ = wf; }
+    void SetDepth(float d)     { depth_ = d; }
+
+  private:
+    float sr_, phase_, freq_, depth_;
+    int   waveform_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Effects/pitchshifter.h — Time-domain pitch shifter ─────────────
+['Effects/pitchshifter.h', `#pragma once
+#include <cmath>
+#include <cstdint>
+#include "Utility/dsp.h"
+
+#ifndef SHIFT_BUFFER_SIZE
+#define SHIFT_BUFFER_SIZE 16384
+#endif
+
+namespace daisysp {
+
+class PitchShifter {
+  public:
+    void Init(float sr) {
+        sr_ = sr;
+        transpose_ = 0.0f; fun_ = 0.0f;
+        del_size_ = SHIFT_BUFFER_SIZE;
+        write_pos_ = 0;
+        read_phase1_ = 0.0f;
+        read_phase2_ = (float)del_size_ * 0.5f;
+        for (uint32_t i = 0; i < SHIFT_BUFFER_SIZE; i++) buf_[i] = 0.0f;
+    }
+
+    float Process(float& in) {
+        buf_[write_pos_] = in;
+        write_pos_ = (write_pos_ + 1) % del_size_;
+        float ratio = powf(2.0f, transpose_ / 12.0f);
+        float rate = 1.0f - ratio;
+        read_phase1_ += rate;
+        if (read_phase1_ >= (float)del_size_) read_phase1_ -= (float)del_size_;
+        if (read_phase1_ < 0.0f) read_phase1_ += (float)del_size_;
+        read_phase2_ = read_phase1_ + (float)del_size_ * 0.5f;
+        if (read_phase2_ >= (float)del_size_) read_phase2_ -= (float)del_size_;
+        uint32_t i1 = (uint32_t)read_phase1_ % del_size_;
+        uint32_t i2 = (uint32_t)read_phase2_ % del_size_;
+        float w1 = sinf(read_phase1_ / (float)del_size_ * PI_F);
+        float w2 = sinf(read_phase2_ / (float)del_size_ * PI_F);
+        return buf_[i1] * w1 * w1 + buf_[i2] * w2 * w2;
+    }
+
+    void SetTransposition(const float& t) { transpose_ = t; }
+    void SetDelSize(uint32_t s)           { del_size_ = (s > SHIFT_BUFFER_SIZE) ? SHIFT_BUFFER_SIZE : s; }
+    void SetFun(float f)                  { fun_ = f; }
+
+  private:
+    float    sr_, transpose_, fun_;
+    float    buf_[SHIFT_BUFFER_SIZE];
+    uint32_t write_pos_, del_size_;
+    float    read_phase1_, read_phase2_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Drums/analogbassdrum.h — 808 bass drum ─────────────────────────
+['Drums/analogbassdrum.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class AnalogBassDrum {
+  public:
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        freq_ = 60.0f; tone_ = 0.5f; decay_ = 0.5f;
+        accent_ = 0.5f; attack_fm_ = 0.0f; self_fm_ = 0.0f;
+        sustain_ = false; phase_ = 0.0f; env_ = 0.0f;
+    }
+
+    float Process(bool trigger = false) {
+        if (trigger) Trig();
+        float dec = 1.0f - (1.0f - decay_) * 0.01f;
+        env_ *= dec;
+        float f = freq_ + env_ * freq_ * tone_ * 4.0f;
+        phase_ += f / sr_;
+        if (phase_ >= 1.0f) phase_ -= 1.0f;
+        return sinf(phase_ * TWOPI_F) * env_ * accent_;
+    }
+
+    void  Trig()                      { env_ = 1.0f; }
+    void  SetSustain(bool s)          { sustain_ = s; }
+    void  SetAccent(float a)          { accent_ = a; }
+    void  SetFreq(float f)            { freq_ = f; }
+    void  SetTone(float t)            { tone_ = t; }
+    void  SetDecay(float d)           { decay_ = d; }
+    void  SetAttackFmAmount(float a)  { attack_fm_ = a; }
+    void  SetSelfFmAmount(float a)    { self_fm_ = a; }
+
+  private:
+    float sr_, freq_, tone_, decay_, accent_, attack_fm_, self_fm_;
+    bool  sustain_;
+    float phase_, env_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Drums/analogsnaredrum.h — 808 snare drum ───────────────────────
+['Drums/analogsnaredrum.h', `#pragma once
+#include <cmath>
+#include <cstdint>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class AnalogSnareDrum {
+  public:
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        freq_ = 200.0f; tone_ = 0.5f; decay_ = 0.5f;
+        accent_ = 0.5f; snappy_ = 0.5f;
+        sustain_ = false; phase_ = 0.0f; env_ = 0.0f;
+        seed_ = 12345;
+    }
+
+    float Process(bool trigger = false) {
+        if (trigger) Trig();
+        float dec = 1.0f - (1.0f - decay_) * 0.005f;
+        env_ *= dec;
+        phase_ += freq_ / sr_;
+        if (phase_ >= 1.0f) phase_ -= 1.0f;
+        seed_ = seed_ * 1664525u + 1013904223u;
+        float noise = (float)(int32_t)seed_ / 2147483648.0f;
+        float body = sinf(phase_ * TWOPI_F) * (1.0f - snappy_);
+        float snap = noise * snappy_;
+        return (body + snap) * env_ * accent_;
+    }
+
+    void  Trig()                { env_ = 1.0f; }
+    void  SetSustain(bool s)    { sustain_ = s; }
+    void  SetAccent(float a)    { accent_ = a; }
+    void  SetFreq(float f)      { freq_ = f; }
+    void  SetTone(float t)      { tone_ = t; }
+    void  SetDecay(float d)     { decay_ = d; }
+    void  SetSnappy(float s)    { snappy_ = s; }
+
+  private:
+    float    sr_, freq_, tone_, decay_, accent_, snappy_;
+    bool     sustain_;
+    float    phase_, env_;
+    uint32_t seed_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Drums/synthbassdrum.h — Synthetic bass drum ─────────────────────
+['Drums/synthbassdrum.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class SyntheticBassDrum {
+  public:
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        freq_ = 60.0f; tone_ = 0.5f; decay_ = 0.5f;
+        accent_ = 0.5f; dirt_ = 0.0f; fm_amt_ = 0.0f; fm_dec_ = 0.5f;
+        sustain_ = false; phase_ = 0.0f; env_ = 0.0f; fm_env_ = 0.0f;
+    }
+
+    float Process(bool trigger = false) {
+        if (trigger) Trig();
+        env_    *= 1.0f - (1.0f - decay_) * 0.01f;
+        fm_env_ *= 1.0f - (1.0f - fm_dec_) * 0.02f;
+        float f = freq_ * (1.0f + fm_env_ * fm_amt_ * 8.0f);
+        phase_ += f / sr_;
+        if (phase_ >= 1.0f) phase_ -= 1.0f;
+        return sinf(phase_ * TWOPI_F) * env_ * accent_;
+    }
+
+    void  Trig()                         { env_ = 1.0f; fm_env_ = 1.0f; }
+    void  SetSustain(bool s)             { sustain_ = s; }
+    void  SetAccent(float a)             { accent_ = a; }
+    void  SetFreq(float f)               { freq_ = f; }
+    void  SetTone(float t)               { tone_ = t; }
+    void  SetDecay(float d)              { decay_ = d; }
+    void  SetDirtiness(float d)          { dirt_ = d; }
+    void  SetFmEnvelopeAmount(float a)   { fm_amt_ = a; }
+    void  SetFmEnvelopeDecay(float d)    { fm_dec_ = d; }
+
+  private:
+    float sr_, freq_, tone_, decay_, accent_, dirt_, fm_amt_, fm_dec_;
+    bool  sustain_;
+    float phase_, env_, fm_env_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Drums/synthsnaredrum.h — Synthetic snare drum ───────────────────
+['Drums/synthsnaredrum.h', `#pragma once
+#include <cmath>
+#include <cstdint>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class SyntheticSnareDrum {
+  public:
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        freq_ = 200.0f; fm_amt_ = 0.5f; decay_ = 0.5f;
+        accent_ = 0.5f; snappy_ = 0.5f;
+        sustain_ = false; phase_ = 0.0f; env_ = 0.0f;
+        seed_ = 54321;
+    }
+
+    float Process(bool trigger = false) {
+        if (trigger) Trig();
+        env_ *= 1.0f - (1.0f - decay_) * 0.005f;
+        phase_ += freq_ / sr_;
+        if (phase_ >= 1.0f) phase_ -= 1.0f;
+        seed_ = seed_ * 1664525u + 1013904223u;
+        float noise = (float)(int32_t)seed_ / 2147483648.0f;
+        return (sinf(phase_ * TWOPI_F) * (1.0f - snappy_) + noise * snappy_) * env_ * accent_;
+    }
+
+    void  Trig()                  { env_ = 1.0f; }
+    void  SetSustain(bool s)      { sustain_ = s; }
+    void  SetAccent(float a)      { accent_ = a; }
+    void  SetFreq(float f)        { freq_ = f; }
+    void  SetFmAmount(float f)    { fm_amt_ = f; }
+    void  SetDecay(float d)       { decay_ = d; }
+    void  SetSnappy(float s)      { snappy_ = s; }
+
+  private:
+    float    sr_, freq_, fm_amt_, decay_, accent_, snappy_;
+    bool     sustain_;
+    float    phase_, env_;
+    uint32_t seed_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Drums/hihat.h — Hi-hat ─────────────────────────────────────────
+['Drums/hihat.h', `#pragma once
+#include <cmath>
+#include <cstdint>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+struct SquareNoise {};
+struct RingModNoise {};
+struct LinearVCA {};
+struct SwingVCA {};
+
+template <typename NoiseSource = SquareNoise, typename VCA = LinearVCA, bool resonance = true>
+class HiHat {
+  public:
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        freq_ = 3000.0f; tone_ = 0.5f; decay_ = 0.5f;
+        accent_ = 0.5f; noisiness_ = 0.5f;
+        sustain_ = false; env_ = 0.0f;
+        seed_ = 98765;
+    }
+
+    float Process(bool trigger = false) {
+        if (trigger) Trig();
+        env_ *= 1.0f - (1.0f - decay_) * 0.003f;
+        seed_ = seed_ * 1664525u + 1013904223u;
+        float noise = (float)(int32_t)seed_ / 2147483648.0f;
+        return noise * env_ * accent_;
+    }
+
+    void  Trig()                   { env_ = 1.0f; }
+    void  SetSustain(bool s)       { sustain_ = s; }
+    void  SetAccent(float a)       { accent_ = a; }
+    void  SetFreq(float f)         { freq_ = f; }
+    void  SetTone(float t)         { tone_ = t; }
+    void  SetDecay(float d)        { decay_ = d; }
+    void  SetNoisiness(float n)    { noisiness_ = n; }
+
+  private:
+    float    sr_, freq_, tone_, decay_, accent_, noisiness_;
+    bool     sustain_;
+    float    env_;
+    uint32_t seed_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── PhysicalModeling/KarplusString.h — Karplus-Strong string ────────
+['PhysicalModeling/KarplusString.h', `#pragma once
+#include <cmath>
+#include <cstddef>
+#include "Utility/dsp.h"
+#include "Utility/delayline.h"
+
+namespace daisysp {
+
+class String {
+  public:
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        freq_ = 440.0f;
+        brightness_ = 0.5f;
+        damping_ = 0.5f;
+        nonlin_ = 0.0f;
+        delay_.Init();
+        SetFreq(freq_);
+        prev_ = 0.0f;
+    }
+
+    void Reset() { delay_.Reset(); prev_ = 0.0f; }
+
+    float Process(const float in) {
+        float read = delay_.Read(delay_len_);
+        float filt = prev_ + (1.0f - damping_ * 0.5f) * (read - prev_);
+        filt *= brightness_ * 0.5f + 0.5f;
+        prev_ = filt;
+        delay_.Write(in + filt * 0.998f);
+        return read;
+    }
+
+    void SetFreq(float f) {
+        freq_ = fmaxf(f, 20.0f);
+        delay_len_ = fminf(sr_ / freq_, 1023.0f);
+    }
+    void SetBrightness(float b)   { brightness_ = b; }
+    void SetDamping(float d)      { damping_ = d; }
+    void SetNonLinearity(float n) { nonlin_ = n; }
+
+  private:
+    float sr_, freq_, brightness_, damping_, nonlin_;
+    float delay_len_ = 100.0f;
+    float prev_ = 0.0f;
+    DelayLine<float, 1024> delay_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── PhysicalModeling/stringvoice.h — String voice with exciter ──────
+['PhysicalModeling/stringvoice.h', `#pragma once
+#include <cmath>
+#include <cstdint>
+#include "Utility/dsp.h"
+#include "PhysicalModeling/KarplusString.h"
+
+namespace daisysp {
+
+class StringVoice {
+  public:
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        string_.Init(sample_rate);
+        env_ = 0.0f; aux_ = 0.0f;
+        accent_ = 0.5f; sustain_ = false;
+        seed_ = 11111;
+    }
+
+    float Process(bool trigger = false) {
+        if (trigger) Trig();
+        env_ *= 0.997f;
+        seed_ = seed_ * 1664525u + 1013904223u;
+        float noise = (float)(int32_t)seed_ / 2147483648.0f;
+        float excitation = noise * env_ * accent_;
+        if (sustain_) {
+            seed_ = seed_ * 1664525u + 1013904223u;
+            excitation += ((float)(int32_t)seed_ / 2147483648.0f) * 0.002f;
+        }
+        aux_ = excitation;
+        return string_.Process(excitation);
+    }
+
+    void  Trig()                    { env_ = 1.0f; }
+    void  Reset()                   { string_.Reset(); }
+    void  SetSustain(bool s)        { sustain_ = s; }
+    void  SetFreq(float f)          { string_.SetFreq(f); }
+    void  SetAccent(float a)        { accent_ = a; }
+    void  SetStructure(float s)     { string_.SetNonLinearity(s < 0.26f ? s * 3.8f - 1.0f : (s - 0.26f) / 0.74f); }
+    void  SetBrightness(float b)    { string_.SetBrightness(b); }
+    void  SetDamping(float d)       { string_.SetDamping(d); }
+    float GetAux() const            { return aux_; }
+
+  private:
+    float    sr_, env_, aux_, accent_;
+    bool     sustain_;
+    uint32_t seed_;
+    String   string_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── PhysicalModeling/modalvoice.h — Modal synthesis voice ───────────
+['PhysicalModeling/modalvoice.h', `#pragma once
+#include <cmath>
+#include <cstdint>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class ModalVoice {
+  public:
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        freq_ = 440.0f; accent_ = 0.5f;
+        structure_ = 0.5f; brightness_ = 0.5f; damping_ = 0.5f;
+        sustain_ = false; env_ = 0.0f; aux_ = 0.0f;
+        d1_ = 0.0f; d2_ = 0.0f;
+        seed_ = 22222;
+    }
+
+    float Process(bool trigger = false) {
+        if (trigger) Trig();
+        env_ *= 0.997f;
+        seed_ = seed_ * 1664525u + 1013904223u;
+        float noise = (float)(int32_t)seed_ / 2147483648.0f;
+        float excitation = noise * env_ * accent_;
+        aux_ = excitation;
+        float f = 2.0f * sinf(PI_F * fminf(freq_ / sr_, 0.45f));
+        float q = 1.0f / (1.0f + (1.0f - damping_) * 0.1f);
+        float hp = excitation - q * d1_ - d2_;
+        float bp = f * hp + d1_;
+        float lp = f * bp + d2_;
+        d1_ = bp; d2_ = lp;
+        return bp * brightness_;
+    }
+
+    void  Trig()                    { env_ = 1.0f; }
+    void  SetSustain(bool s)        { sustain_ = s; }
+    void  SetFreq(float f)          { freq_ = f; }
+    void  SetAccent(float a)        { accent_ = a; }
+    void  SetStructure(float s)     { structure_ = s; }
+    void  SetBrightness(float b)    { brightness_ = b; }
+    void  SetDamping(float d)       { damping_ = d; }
+    float GetAux() const            { return aux_; }
+
+  private:
+    float    sr_, freq_, accent_, structure_, brightness_, damping_;
+    bool     sustain_;
+    float    env_, aux_, d1_, d2_;
+    uint32_t seed_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── PhysicalModeling/resonator.h — Resonant body ────────────────────
+['PhysicalModeling/resonator.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class Resonator {
+  public:
+    void Init(float position, int resolution, float sample_rate) {
+        sr_ = sample_rate;
+        freq_ = 440.0f; structure_ = 0.5f;
+        brightness_ = 0.5f; damping_ = 0.5f;
+        d1_ = 0.0f; d2_ = 0.0f;
+        (void)position; (void)resolution;
+    }
+
+    float Process(const float in) {
+        float f = 2.0f * sinf(PI_F * fminf(freq_ / sr_, 0.45f));
+        float q = 1.0f / (1.0f + (1.0f - damping_) * 0.1f);
+        float hp = in - q * d1_ - d2_;
+        float bp = f * hp + d1_;
+        float lp = f * bp + d2_;
+        d1_ = bp; d2_ = lp;
+        return bp;
+    }
+
+    void SetFreq(float f)         { freq_ = f; }
+    void SetStructure(float s)    { structure_ = s; }
+    void SetBrightness(float b)   { brightness_ = b; }
+    void SetDamping(float d)      { damping_ = d; }
+
+  private:
+    float sr_, freq_, structure_, brightness_, damping_;
+    float d1_, d2_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── PhysicalModeling/drip.h — Water drip model ─────────────────────
+['PhysicalModeling/drip.h', `#pragma once
+#include <cmath>
+#include <cstdint>
+
+namespace daisysp {
+
+class Drip {
+  public:
+    void Init(float sample_rate, float dettack) {
+        sr_ = sample_rate; env_ = 0.0f; seed_ = 33333;
+        (void)dettack;
+    }
+
+    float Process(bool trig) {
+        if (trig) env_ = 1.0f;
+        env_ *= 0.999f;
+        seed_ = seed_ * 1664525u + 1013904223u;
+        float noise = (float)(int32_t)seed_ / 2147483648.0f;
+        return noise * env_ * env_ * 0.3f;
+    }
+
+  private:
+    float    sr_, env_;
+    uint32_t seed_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Dynamics/limiter.h — Peak limiter ───────────────────────────────
+['Dynamics/limiter.h', `#pragma once
+#include <cstddef>
+
+namespace daisysp {
+
+class Limiter {
+  public:
+    void Init() {}
+
+    void ProcessBlock(float* in, size_t size, float pre_gain) {
+        for (size_t i = 0; i < size; i++) {
+            in[i] *= pre_gain;
+            if (in[i] > 1.0f)  in[i] = 1.0f;
+            if (in[i] < -1.0f) in[i] = -1.0f;
+        }
+    }
+};
+
+} // namespace daisysp
+`],
+
+// ─── Sampling/granularplayer.h — Granular sample player ──────────────
+['Sampling/granularplayer.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class GranularPlayer {
+  public:
+    void Init(float* sample, int size, float sample_rate) {
+        sample_ = sample; size_ = size; sr_ = sample_rate;
+        pos_ = 0.0f;
+        for (int i = 0; i < 256; i++) {
+            cos_env_[i] = 0.5f * (1.0f - cosf(TWOPI_F * (float)i / 256.0f));
+        }
+    }
+
+    float Process(float speed, float transposition, float grain_size) {
+        if (!sample_ || size_ <= 0) return 0.0f;
+        float pitch_ratio = powf(2.0f, transposition / 1200.0f);
+        pos_ += speed;
+        if (pos_ >= (float)size_) pos_ -= (float)size_;
+        if (pos_ < 0.0f) pos_ += (float)size_;
+        int idx = (int)pos_ % size_;
+        return sample_[idx] * pitch_ratio;
+    }
+
+  private:
+    float* sample_ = nullptr;
+    int    size_ = 0;
+    float  sr_ = 48000.0f;
+    float  pos_ = 0.0f;
+    float  cos_env_[256];
 };
 
 } // namespace daisysp
