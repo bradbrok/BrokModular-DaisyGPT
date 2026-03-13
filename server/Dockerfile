@@ -13,12 +13,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-# Clone and build libDaisy at pinned tag
-RUN git clone --depth 1 --branch v7.0.1 https://github.com/electro-smith/libDaisy.git \
+# Clone and build libDaisy at pinned tag (needs submodules for HAL drivers)
+RUN git clone --recursive --depth 1 --branch v7.0.1 https://github.com/electro-smith/libDaisy.git \
     && cd libDaisy && make -j$(nproc)
 
 # Clone and build DaisySP at pinned tag
-RUN git clone --depth 1 --branch v1.2.0 https://github.com/electro-smith/DaisySP.git \
+RUN git clone --recursive --depth 1 --branch v1.2.0 https://github.com/electro-smith/DaisySP.git \
     && cd DaisySP && make -j$(nproc)
 
 # Stage 2: Runtime
@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc-arm-none-eabi \
     libnewlib-arm-none-eabi \
     build-essential \
-    python3.11 \
+    python3 \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
