@@ -83,6 +83,12 @@ struct DaisyPatch {
 #include "Synthesis/oscillator.h"
 #include "Synthesis/harmonic_osc.h"
 #include "Synthesis/fm2.h"
+#include "Synthesis/variablesawosc.h"
+#include "Synthesis/variableshapeosc.h"
+#include "Synthesis/vosim.h"
+#include "Synthesis/formantosc.h"
+#include "Synthesis/zoscillator.h"
+#include "Synthesis/oscillatorbank.h"
 #include "Filters/svf.h"
 #include "Filters/ladder.h"
 #include "Filters/onepole.h"
@@ -96,16 +102,23 @@ struct DaisyPatch {
 #include "Utility/maytrig.h"
 #include "Utility/samplehold.h"
 #include "Utility/smooth_random.h"
+#include "Utility/looper.h"
 #include "Noise/whitenoise.h"
 #include "Noise/dust.h"
 #include "Noise/clockednoise.h"
 #include "Noise/fractal_noise.h"
+#include "Noise/grainlet.h"
+#include "Noise/particle.h"
 #include "Effects/overdrive.h"
 #include "Effects/decimator.h"
 #include "Effects/sampleratereducer.h"
 #include "Effects/wavefolder.h"
 #include "Effects/tremolo.h"
 #include "Effects/pitchshifter.h"
+#include "Effects/autowah.h"
+#include "Effects/chorus.h"
+#include "Effects/flanger.h"
+#include "Effects/phaser.h"
 #include "Drums/analogbassdrum.h"
 #include "Drums/analogsnaredrum.h"
 #include "Drums/synthbassdrum.h"
@@ -1982,6 +1995,874 @@ class GranularPlayer {
     float  sr_ = 48000.0f;
     float  pos_ = 0.0f;
     float  cos_env_[256];
+};
+
+} // namespace daisysp
+`],
+
+// ─── Synthesis/variablesawosc.h — Variable Saw Oscillator ────────────
+['Synthesis/variablesawosc.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class VariableSawOscillator {
+  public:
+    VariableSawOscillator() {}
+    ~VariableSawOscillator() {}
+
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        phase_ = 0.0f;
+        frequency_ = 220.0f;
+        pw_ = 0.5f;
+        waveshape_ = 0.0f;
+        next_sample_ = 0.0f;
+        previous_pw_ = 0.5f;
+        high_ = false;
+    }
+
+    float Process() {
+        float pw = fclamp(pw_, 0.01f, 0.99f);
+        float freq = frequency_ / sr_;
+        float this_sample = next_sample_;
+
+        float slope_up = 1.0f / pw;
+        float slope_down = 1.0f / (1.0f - pw);
+        float triangle_amount = waveshape_;
+        float notch_amount = 1.0f - waveshape_;
+
+        next_sample_ = ComputeNaiveSample(phase_, pw, slope_up, slope_down, triangle_amount, notch_amount);
+        phase_ += freq;
+        if (phase_ >= 1.0f) phase_ -= 1.0f;
+
+        previous_pw_ = pw;
+        return (this_sample + next_sample_) * 0.5f;
+    }
+
+    void SetFreq(float frequency) { frequency_ = frequency; }
+    void SetPW(float pw) { pw_ = fclamp(pw, -1.0f, 1.0f) * 0.5f + 0.5f; }
+    void SetWaveshape(float waveshape) { waveshape_ = fclamp(waveshape, 0.0f, 1.0f); }
+
+  private:
+    float ComputeNaiveSample(float phase, float pw, float slope_up, float slope_down,
+                             float triangle_amount, float notch_amount) {
+        float saw = (phase < pw) ? (phase * slope_up) : (1.0f - (phase - pw) * slope_down);
+        saw = saw * 2.0f - 1.0f;
+        return saw;
+    }
+
+    float sr_, phase_, frequency_, pw_, waveshape_;
+    float next_sample_, previous_pw_;
+    bool high_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Synthesis/variableshapeosc.h — Variable Shape Oscillator ────────
+['Synthesis/variableshapeosc.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class VariableShapeOscillator {
+  public:
+    VariableShapeOscillator() {}
+    ~VariableShapeOscillator() {}
+
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        master_phase_ = 0.0f;
+        slave_phase_ = 0.0f;
+        master_frequency_ = 220.0f;
+        slave_frequency_ = 220.0f;
+        pw_ = 0.5f;
+        waveshape_ = 0.0f;
+        enable_sync_ = false;
+        next_sample_ = 0.0f;
+        previous_pw_ = 0.5f;
+        high_ = false;
+    }
+
+    float Process() {
+        float pw = fclamp(pw_, 0.01f, 0.99f);
+        float master_freq = master_frequency_ / sr_;
+        float slave_freq = slave_frequency_ / sr_;
+        float this_sample = next_sample_;
+
+        float slope_up = 1.0f / pw;
+        float slope_down = 1.0f / (1.0f - pw);
+        float triangle_amount = 1.0f - waveshape_;
+        float square_amount = waveshape_;
+
+        next_sample_ = ComputeNaiveSample(master_phase_, pw, slope_up, slope_down, triangle_amount, square_amount);
+
+        master_phase_ += master_freq;
+        if (master_phase_ >= 1.0f) {
+            master_phase_ -= 1.0f;
+            if (enable_sync_) slave_phase_ = 0.0f;
+        }
+        if (enable_sync_) {
+            slave_phase_ += slave_freq;
+            if (slave_phase_ >= 1.0f) slave_phase_ -= 1.0f;
+        }
+
+        previous_pw_ = pw;
+        return (this_sample + next_sample_) * 0.5f;
+    }
+
+    void SetFreq(float frequency) { master_frequency_ = frequency; }
+    void SetPW(float pw) { pw_ = fclamp(pw, -1.0f, 1.0f) * 0.5f + 0.5f; }
+    void SetWaveshape(float waveshape) { waveshape_ = fclamp(waveshape, 0.0f, 1.0f); }
+    void SetSync(bool enable_sync) { enable_sync_ = enable_sync; }
+    void SetSyncFreq(float frequency) { slave_frequency_ = frequency; }
+
+  private:
+    float ComputeNaiveSample(float phase, float pw, float slope_up, float slope_down,
+                             float triangle_amount, float square_amount) {
+        float tri = (phase < pw) ? (phase * slope_up) : (1.0f - (phase - pw) * slope_down);
+        tri = tri * 2.0f - 1.0f;
+        float sq = (phase < pw) ? 1.0f : -1.0f;
+        return tri * triangle_amount + sq * square_amount;
+    }
+
+    float sr_;
+    bool enable_sync_;
+    float master_phase_, slave_phase_;
+    float next_sample_, previous_pw_;
+    bool high_;
+    float master_frequency_, slave_frequency_, pw_, waveshape_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Synthesis/vosim.h — VOSIM Oscillator ────────────────────────────
+['Synthesis/vosim.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class VosimOscillator {
+  public:
+    VosimOscillator() {}
+    ~VosimOscillator() {}
+
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        carrier_phase_ = 0.0f;
+        formant_1_phase_ = 0.0f;
+        formant_2_phase_ = 0.0f;
+        carrier_frequency_ = 110.0f;
+        formant_1_frequency_ = 550.0f;
+        formant_2_frequency_ = 800.0f;
+        carrier_shape_ = 0.5f;
+    }
+
+    float Process() {
+        float f0 = carrier_frequency_ / sr_;
+        float f1 = formant_1_frequency_ / sr_;
+        float f2 = formant_2_frequency_ / sr_;
+
+        carrier_phase_ += f0;
+        if (carrier_phase_ >= 1.0f) {
+            carrier_phase_ -= 1.0f;
+            formant_1_phase_ = 0.0f;
+            formant_2_phase_ = 0.0f;
+        }
+        formant_1_phase_ += f1;
+        if (formant_1_phase_ >= 1.0f) formant_1_phase_ -= 1.0f;
+        formant_2_phase_ += f2;
+        if (formant_2_phase_ >= 1.0f) formant_2_phase_ -= 1.0f;
+
+        float s1 = Sine(formant_1_phase_);
+        float s2 = Sine(formant_2_phase_);
+        float window = 1.0f - carrier_phase_;
+        window = window * window;
+
+        return (s1 * s1 + s2 * s2 * carrier_shape_) * window;
+    }
+
+    void SetFreq(float freq) { carrier_frequency_ = freq; }
+    void SetForm1Freq(float freq) { formant_1_frequency_ = freq; }
+    void SetForm2Freq(float freq) { formant_2_frequency_ = freq; }
+    void SetShape(float shape) { carrier_shape_ = fclamp(shape, -1.0f, 1.0f) * 0.5f + 0.5f; }
+
+  private:
+    float Sine(float phase) { return sinf(TWOPI_F * phase); }
+    float sr_;
+    float carrier_phase_, formant_1_phase_, formant_2_phase_;
+    float carrier_frequency_, formant_1_frequency_, formant_2_frequency_;
+    float carrier_shape_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Synthesis/formantosc.h — Formant Oscillator ─────────────────────
+['Synthesis/formantosc.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class FormantOscillator {
+  public:
+    FormantOscillator() {}
+    ~FormantOscillator() {}
+
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        carrier_phase_ = 0.0f;
+        formant_phase_ = 0.0f;
+        carrier_frequency_ = 110.0f;
+        formant_frequency_ = 550.0f;
+        phase_shift_ = 0.0f;
+        next_sample_ = 0.0f;
+    }
+
+    float Process() {
+        float this_sample = next_sample_;
+        float cr_freq = carrier_frequency_ / sr_;
+        float fm_freq = formant_frequency_ / sr_;
+
+        carrier_phase_ += cr_freq;
+        if (carrier_phase_ >= 1.0f) {
+            carrier_phase_ -= 1.0f;
+            formant_phase_ = phase_shift_;
+        }
+
+        formant_phase_ += fm_freq;
+        if (formant_phase_ >= 1.0f) formant_phase_ -= 1.0f;
+
+        float window = 1.0f - carrier_phase_;
+        window *= window;
+        next_sample_ = Sine(formant_phase_) * window;
+
+        return (this_sample + next_sample_) * 0.5f;
+    }
+
+    void SetFormantFreq(float freq) { formant_frequency_ = freq; }
+    void SetCarrierFreq(float freq) { carrier_frequency_ = freq; }
+    void SetPhaseShift(float ps) { phase_shift_ = ps; }
+
+  private:
+    float Sine(float phase) { return sinf(TWOPI_F * phase); }
+    float sr_;
+    float carrier_phase_, formant_phase_, next_sample_;
+    float carrier_frequency_, formant_frequency_, phase_shift_;
+    float ps_inc_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Synthesis/zoscillator.h — Z Oscillator ──────────────────────────
+['Synthesis/zoscillator.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class ZOscillator {
+  public:
+    ZOscillator() {}
+    ~ZOscillator() {}
+
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        carrier_phase_ = 0.0f;
+        formant_phase_ = 0.0f;
+        carrier_frequency_ = 110.0f;
+        formant_frequency_ = 550.0f;
+        carrier_shape_ = 0.5f;
+        mode_ = 0.0f;
+        next_sample_ = 0.0f;
+    }
+
+    float Process() {
+        float this_sample = next_sample_;
+        float cr_freq = carrier_frequency_ / sr_;
+        float fm_freq = formant_frequency_ / sr_;
+
+        carrier_phase_ += cr_freq;
+        if (carrier_phase_ >= 1.0f) {
+            carrier_phase_ -= 1.0f;
+            formant_phase_ = 0.0f;
+        }
+        formant_phase_ += fm_freq;
+        if (formant_phase_ >= 1.0f) formant_phase_ -= 1.0f;
+
+        float window = 1.0f - carrier_phase_;
+        float s = Sine(formant_phase_);
+        float offset = mode_ > 0.66f ? (mode_ - 0.66f) * 3.0f : 0.0f;
+        next_sample_ = (s + offset) * window * carrier_shape_;
+
+        return (this_sample + next_sample_) * 0.5f;
+    }
+
+    void SetFreq(float freq) { carrier_frequency_ = freq; }
+    void SetFormantFreq(float freq) { formant_frequency_ = freq; }
+    void SetShape(float shape) { carrier_shape_ = fclamp(shape, 0.0f, 1.0f); }
+    void SetMode(float mode) { mode_ = fclamp(mode, -1.0f, 1.0f) * 0.5f + 0.5f; }
+
+  private:
+    float Sine(float phase) { return sinf(TWOPI_F * phase); }
+    float sr_;
+    float carrier_phase_, formant_phase_, next_sample_;
+    float carrier_frequency_, formant_frequency_;
+    float carrier_shape_, mode_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Synthesis/oscillatorbank.h — Divide-down organ oscillator bank ──
+['Synthesis/oscillatorbank.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class OscillatorBank {
+  public:
+    OscillatorBank() {}
+    ~OscillatorBank() {}
+
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        phase_ = 0.0f;
+        frequency_ = 220.0f;
+        gain_ = 0.5f;
+        for (int i = 0; i < 7; i++) amplitudes_[i] = 0.0f;
+        amplitudes_[0] = 1.0f;
+    }
+
+    float Process() {
+        float freq = frequency_ / sr_;
+        phase_ += freq;
+        if (phase_ >= 1.0f) phase_ -= 1.0f;
+
+        float out = 0.0f;
+        // 7 dividers: 8' saw, 8' sq, 4' saw, 4' sq, 2' saw, 2' sq, 1' saw
+        float dividers[7] = {1.0f, 1.0f, 2.0f, 2.0f, 4.0f, 4.0f, 8.0f};
+        for (int i = 0; i < 7; i++) {
+            float p = fmodf(phase_ * dividers[i], 1.0f);
+            float wave = (i % 2 == 0) ? (2.0f * p - 1.0f) : ((p < 0.5f) ? 1.0f : -1.0f);
+            out += wave * amplitudes_[i];
+        }
+        return out * gain_;
+    }
+
+    void SetFreq(float freq) { frequency_ = freq; }
+    void SetAmplitudes(const float* amplitudes) { for (int i = 0; i < 7; i++) amplitudes_[i] = amplitudes[i]; }
+    void SetSingleAmp(float amp, int idx) { if (idx >= 0 && idx < 7) amplitudes_[idx] = amp; }
+    void SetGain(float gain) { gain_ = gain; }
+
+  private:
+    float sr_, phase_, frequency_, gain_;
+    float amplitudes_[7];
+};
+
+} // namespace daisysp
+`],
+
+// ─── Noise/grainlet.h — Grainlet Oscillator ─────────────────────────
+['Noise/grainlet.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class GrainletOscillator {
+  public:
+    GrainletOscillator() {}
+    ~GrainletOscillator() {}
+
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        carrier_phase_ = 0.0f;
+        formant_phase_ = 0.0f;
+        carrier_frequency_ = 110.0f;
+        formant_frequency_ = 440.0f;
+        carrier_shape_ = 0.5f;
+        carrier_bleed_ = 0.0f;
+        next_sample_ = 0.0f;
+    }
+
+    float Process() {
+        float this_sample = next_sample_;
+        float cr_freq = carrier_frequency_ / sr_;
+        float fm_freq = formant_frequency_ / sr_;
+
+        carrier_phase_ += cr_freq;
+        if (carrier_phase_ >= 1.0f) {
+            carrier_phase_ -= 1.0f;
+            formant_phase_ = 0.0f;
+        }
+        formant_phase_ += fm_freq;
+        if (formant_phase_ >= 1.0f) formant_phase_ -= 1.0f;
+
+        float carrier = Sine(carrier_phase_);
+        float formant = Sine(formant_phase_);
+        float window = 1.0f - carrier_phase_;
+        window = powf(window, 1.0f + carrier_shape_ * 2.0f);
+
+        next_sample_ = (formant * window) + (carrier * carrier_bleed_);
+        return (this_sample + next_sample_) * 0.5f;
+    }
+
+    void SetFreq(float freq) { carrier_frequency_ = freq; }
+    void SetFormantFreq(float freq) { formant_frequency_ = freq; }
+    void SetShape(float shape) { carrier_shape_ = fclamp(shape, 0.0f, 3.0f); }
+    void SetBleed(float bleed) { carrier_bleed_ = fclamp(bleed, 0.0f, 1.0f); }
+
+  private:
+    float Sine(float phase) { return sinf(TWOPI_F * phase); }
+    float sr_;
+    float carrier_phase_, formant_phase_, next_sample_;
+    float carrier_frequency_, formant_frequency_;
+    float carrier_shape_, carrier_bleed_;
+    float new_carrier_shape_, new_carrier_bleed_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Noise/particle.h — Resonant noise particle ─────────────────────
+['Noise/particle.h', `#pragma once
+#include <cmath>
+#include <cstdlib>
+#include "Filters/svf.h"
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class Particle {
+  public:
+    Particle() {}
+    ~Particle() {}
+
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        frequency_ = 1000.0f;
+        density_ = 0.5f;
+        gain_ = 0.5f;
+        spread_ = 1.0f;
+        resonance_ = 0.5f;
+        sync_ = false;
+        rand_phase_ = 0.0f;
+        rand_freq_ = 1.0f;
+        aux_ = 0.0f;
+        filter_.Init(sample_rate);
+        filter_.SetFreq(frequency_);
+        filter_.SetRes(resonance_);
+    }
+
+    float Process() {
+        rand_phase_ += rand_freq_ / sr_;
+        if (rand_phase_ >= 1.0f || sync_) {
+            rand_phase_ -= 1.0f;
+            float r = (float)rand() / (float)RAND_MAX;
+            float new_freq = frequency_ * powf(2.0f, (r - 0.5f) * spread_);
+            filter_.SetFreq(fclamp(new_freq, 20.0f, sr_ * 0.4f));
+            sync_ = false;
+        }
+
+        float noise = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+        float gate = ((float)rand() / (float)RAND_MAX) < density_ ? 1.0f : 0.0f;
+        aux_ = noise;
+
+        filter_.SetRes(resonance_);
+        filter_.Process(noise * gate * gain_);
+        return filter_.Band();
+    }
+
+    float GetNoise() { return aux_; }
+    void SetFreq(float frequency) { frequency_ = frequency; }
+    void SetResonance(float resonance) { resonance_ = fclamp(resonance, 0.0f, 1.0f); }
+    void SetRandomFreq(float freq) { rand_freq_ = freq; }
+    void SetDensity(float density) { density_ = fclamp(density, 0.0f, 1.0f); }
+    void SetGain(float gain) { gain_ = gain; }
+    void SetSpread(float spread) { spread_ = spread; }
+    void SetSync(bool sync) { sync_ = sync; }
+
+  private:
+    float sr_, aux_, frequency_, density_, gain_, spread_, resonance_;
+    bool sync_;
+    float rand_phase_, rand_freq_;
+    float pre_gain_;
+    Svf filter_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Effects/autowah.h — Autowah effect ──────────────────────────────
+['Effects/autowah.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class Autowah {
+  public:
+    Autowah() {}
+    ~Autowah() {}
+
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        wah_ = 0.5f;
+        level_ = 0.5f;
+        wet_dry_ = 100.0f;
+        for (int i = 0; i < 3; i++) rec0_[i] = 0.0f;
+        for (int i = 0; i < 2; i++) { rec1_[i] = rec2_[i] = rec3_[i] = rec4_[i] = rec5_[i] = 0.0f; }
+    }
+
+    float Process(float in) {
+        float env = fabsf(in);
+        rec0_[0] = rec0_[0] * 0.999f + env * 0.001f;
+        float cutoff = 200.0f + rec0_[0] * wah_ * 8000.0f;
+        float f = 2.0f * sinf(PI_F * cutoff / sr_);
+        f = fclamp(f, 0.0f, 0.9f);
+        rec1_[0] += f * (in - rec1_[0] - rec2_[0] * level_);
+        rec2_[0] += f * rec1_[0];
+        float wet = rec2_[0];
+        float mix = wet_dry_ / 100.0f;
+        return in * (1.0f - mix) + wet * mix;
+    }
+
+    void SetWah(float wah) { wah_ = fclamp(wah, 0.0f, 1.0f); }
+    void SetDryWet(float drywet) { wet_dry_ = fclamp(drywet, 0.0f, 100.0f); }
+    void SetLevel(float level) { level_ = fclamp(level, 0.0f, 1.0f); }
+
+  private:
+    float sr_, wah_, level_, wet_dry_;
+    float rec0_[3], rec1_[2], rec2_[2], rec3_[2], rec4_[2], rec5_[2];
+};
+
+} // namespace daisysp
+`],
+
+// ─── Effects/chorus.h — Chorus effect ────────────────────────────────
+['Effects/chorus.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+#include "Utility/delayline.h"
+
+namespace daisysp {
+
+class ChorusEngine {
+  public:
+    ChorusEngine() {}
+    ~ChorusEngine() {}
+
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        del_.Init();
+        lfo_phase_ = 0.0f;
+        lfo_freq_ = 0.8f;
+        lfo_amp_ = 0.5f;
+        feedback_ = 0.2f;
+        delay_ = 0.5f;
+    }
+
+    float Process(float in) {
+        float lfo = ProcessLfo();
+        float delay_ms = (0.1f + delay_ * 49.9f);
+        float delay_samps = (delay_ms + lfo * lfo_amp_ * 10.0f) * sr_ / 1000.0f;
+        del_.Write(in + del_.Read(delay_samps) * feedback_);
+        return del_.Read(delay_samps);
+    }
+
+    void SetLfoDepth(float depth) { lfo_amp_ = fclamp(depth, 0.0f, 1.0f); }
+    void SetLfoFreq(float freq) { lfo_freq_ = freq; }
+    void SetDelay(float delay) { delay_ = fclamp(delay, 0.0f, 1.0f); }
+    void SetDelayMs(float ms) { delay_ = fclamp(ms / 50.0f, 0.0f, 1.0f); }
+    void SetFeedback(float feedback) { feedback_ = fclamp(feedback, 0.0f, 1.0f); }
+
+  private:
+    float ProcessLfo() {
+        lfo_phase_ += lfo_freq_ / sr_;
+        if (lfo_phase_ >= 1.0f) lfo_phase_ -= 1.0f;
+        return (lfo_phase_ < 0.5f) ? (4.0f * lfo_phase_ - 1.0f) : (3.0f - 4.0f * lfo_phase_);
+    }
+
+    float sr_, lfo_phase_, lfo_freq_, lfo_amp_, feedback_, delay_;
+    DelayLine<float, 2400> del_;
+};
+
+class Chorus {
+  public:
+    Chorus() {}
+    ~Chorus() {}
+
+    void Init(float sample_rate) {
+        engines_[0].Init(sample_rate);
+        engines_[1].Init(sample_rate);
+        pan_[0] = 0.25f;
+        pan_[1] = 0.75f;
+        sigl_ = sigr_ = 0.0f;
+    }
+
+    float Process(float in) {
+        float l = engines_[0].Process(in);
+        float r = engines_[1].Process(in);
+        sigl_ = l * (1.0f - pan_[0]) + r * pan_[0];
+        sigr_ = l * (1.0f - pan_[1]) + r * pan_[1];
+        return (sigl_ + sigr_) * 0.5f;
+    }
+
+    float GetLeft() { return sigl_; }
+    float GetRight() { return sigr_; }
+
+    void SetPan(float panl, float panr) { pan_[0] = panl; pan_[1] = panr; }
+    void SetPan(float pan) { SetPan(pan, pan); }
+    void SetLfoDepth(float depthl, float depthr) { engines_[0].SetLfoDepth(depthl); engines_[1].SetLfoDepth(depthr); }
+    void SetLfoDepth(float depth) { SetLfoDepth(depth, depth); }
+    void SetLfoFreq(float freql, float freqr) { engines_[0].SetLfoFreq(freql); engines_[1].SetLfoFreq(freqr); }
+    void SetLfoFreq(float freq) { SetLfoFreq(freq, freq * 1.1f); }
+    void SetDelay(float delayl, float delayr) { engines_[0].SetDelay(delayl); engines_[1].SetDelay(delayr); }
+    void SetDelay(float delay) { SetDelay(delay, delay); }
+    void SetDelayMs(float msl, float msr) { engines_[0].SetDelayMs(msl); engines_[1].SetDelayMs(msr); }
+    void SetDelayMs(float ms) { SetDelayMs(ms, ms); }
+    void SetFeedback(float feedbackl, float feedbackr) { engines_[0].SetFeedback(feedbackl); engines_[1].SetFeedback(feedbackr); }
+    void SetFeedback(float feedback) { SetFeedback(feedback, feedback); }
+
+  private:
+    ChorusEngine engines_[2];
+    float pan_[2];
+    float sigl_, sigr_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Effects/flanger.h — Flanger effect ──────────────────────────────
+['Effects/flanger.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+#include "Utility/delayline.h"
+
+namespace daisysp {
+
+class Flanger {
+  public:
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        del_.Init();
+        lfo_phase_ = 0.0f;
+        lfo_freq_ = 0.3f;
+        lfo_amp_ = 0.5f;
+        feedback_ = 0.5f;
+        delay_ = 0.5f;
+    }
+
+    float Process(float in) {
+        float lfo = ProcessLfo();
+        float delay_ms = 0.1f + delay_ * 6.9f;
+        float delay_samps = (delay_ms + lfo * lfo_amp_ * 3.0f) * sr_ / 1000.0f;
+        float delayed = del_.Read(delay_samps);
+        del_.Write(in + delayed * feedback_);
+        return (in + delayed) * 0.5f;
+    }
+
+    void SetFeedback(float feedback) { feedback_ = fclamp(feedback, 0.0f, 1.0f); }
+    void SetLfoDepth(float depth) { lfo_amp_ = fclamp(depth, 0.0f, 1.0f); }
+    void SetLfoFreq(float freq) { lfo_freq_ = freq; }
+    void SetDelay(float delay) { delay_ = fclamp(delay, 0.0f, 1.0f); }
+    void SetDelayMs(float ms) { delay_ = fclamp(ms / 7.0f, 0.0f, 1.0f); }
+
+  private:
+    float ProcessLfo() {
+        lfo_phase_ += lfo_freq_ / sr_;
+        if (lfo_phase_ >= 1.0f) lfo_phase_ -= 1.0f;
+        return (lfo_phase_ < 0.5f) ? (4.0f * lfo_phase_ - 1.0f) : (3.0f - 4.0f * lfo_phase_);
+    }
+
+    float sr_, lfo_phase_, lfo_freq_, lfo_amp_, feedback_, delay_;
+    DelayLine<float, 960> del_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Effects/phaser.h — Phaser effect ────────────────────────────────
+['Effects/phaser.h', `#pragma once
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class PhaserEngine {
+  public:
+    PhaserEngine() {}
+    ~PhaserEngine() {}
+
+    void Init(float sample_rate) {
+        sr_ = sample_rate;
+        lfo_phase_ = 0.0f;
+        lfo_freq_ = 0.5f;
+        lfo_amp_ = 0.5f;
+        feedback_ = 0.5f;
+        ap_freq_ = 1000.0f;
+        last_sample_ = 0.0f;
+    }
+
+    float Process(float in) {
+        float lfo = ProcessLfo();
+        float freq = ap_freq_ + lfo * lfo_amp_ * ap_freq_ * 0.5f;
+        freq = fclamp(freq, 20.0f, sr_ * 0.4f);
+
+        // Simple allpass: y[n] = -x[n] + (1+a)*x[n-1] + a*y[n-1]
+        float a = (1.0f - PI_F * freq / sr_) / (1.0f + PI_F * freq / sr_);
+        float out = a * (in - last_sample_) + last_sample_ + feedback_ * out_;
+        last_sample_ = in;
+        out_ = out;
+        return out;
+    }
+
+    void SetLfoDepth(float depth) { lfo_amp_ = fclamp(depth, 0.0f, 1.0f); }
+    void SetLfoFreq(float lfo_freq) { lfo_freq_ = lfo_freq; }
+    void SetFreq(float ap_freq) { ap_freq_ = ap_freq; }
+    void SetFeedback(float feedback) { feedback_ = fclamp(feedback, 0.0f, 0.99f); }
+
+  private:
+    float ProcessLfo() {
+        lfo_phase_ += lfo_freq_ / sr_;
+        if (lfo_phase_ >= 1.0f) lfo_phase_ -= 1.0f;
+        return (lfo_phase_ < 0.5f) ? (4.0f * lfo_phase_ - 1.0f) : (3.0f - 4.0f * lfo_phase_);
+    }
+
+    float sr_, lfo_phase_, lfo_freq_, lfo_amp_;
+    float feedback_, ap_freq_, last_sample_, out_ = 0.0f;
+};
+
+class Phaser {
+  public:
+    Phaser() {}
+    ~Phaser() {}
+
+    void Init(float sample_rate) {
+        poles_ = 4;
+        for (int i = 0; i < 8; i++) engines_[i].Init(sample_rate);
+    }
+
+    float Process(float in) {
+        float sig = in;
+        for (int i = 0; i < poles_; i++) {
+            sig = engines_[i].Process(sig);
+        }
+        return (in + sig) * 0.5f;
+    }
+
+    void SetPoles(int poles) { poles_ = (poles < 1) ? 1 : (poles > 8 ? 8 : poles); }
+    void SetLfoDepth(float depth) { for (int i = 0; i < 8; i++) engines_[i].SetLfoDepth(depth); }
+    void SetLfoFreq(float lfo_freq) { for (int i = 0; i < 8; i++) engines_[i].SetLfoFreq(lfo_freq * (1.0f + i * 0.05f)); }
+    void SetFreq(float ap_freq) { for (int i = 0; i < 8; i++) engines_[i].SetFreq(ap_freq * (1.0f + i * 0.3f)); }
+    void SetFeedback(float feedback) { for (int i = 0; i < 8; i++) engines_[i].SetFeedback(feedback); }
+
+  private:
+    PhaserEngine engines_[8];
+    int poles_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Utility/looper.h — Multimode audio looper ──────────────────────
+['Utility/looper.h', `#pragma once
+#include <algorithm>
+#include <cmath>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class Looper {
+  public:
+    Looper() {}
+    ~Looper() {}
+
+    enum class Mode { NORMAL, ONETIME_DUB, REPLACE, FRIPPERTRONICS };
+
+    void Init(float *mem, size_t size) {
+        buff_ = mem;
+        buffer_size_ = size;
+        std::fill(&buff_[0], &buff_[buffer_size_], 0.0f);
+        state_ = State::EMPTY;
+        mode_ = Mode::NORMAL;
+        pos_ = 0;
+        recsize_ = 0;
+        half_speed_ = false;
+        reverse_ = false;
+        recording_ = false;
+    }
+
+    float Process(const float input) {
+        if (state_ == State::EMPTY) return 0.0f;
+
+        float sig = buff_[(size_t)pos_ % buffer_size_];
+
+        if (recording_) {
+            if (mode_ == Mode::REPLACE)
+                buff_[(size_t)pos_ % buffer_size_] = input;
+            else
+                buff_[(size_t)pos_ % buffer_size_] += input;
+        }
+
+        float inc = half_speed_ ? 0.5f : 1.0f;
+        if (reverse_) inc = -inc;
+        pos_ += inc;
+        if (pos_ >= (float)recsize_) pos_ = 0;
+        if (pos_ < 0) pos_ = (float)(recsize_ - 1);
+
+        return sig;
+    }
+
+    void Clear() { state_ = State::EMPTY; }
+
+    void TrigRecord() {
+        if (state_ == State::EMPTY) {
+            state_ = State::REC_FIRST;
+            pos_ = 0;
+            recsize_ = 0;
+            recording_ = true;
+        } else if (recording_) {
+            recording_ = false;
+            if (state_ == State::REC_FIRST) {
+                recsize_ = (size_t)pos_;
+                state_ = State::PLAYING;
+                pos_ = 0;
+            }
+        } else {
+            recording_ = true;
+        }
+    }
+
+    bool Recording() const { return recording_; }
+    void SetMode(Mode mode) { mode_ = mode; }
+    Mode GetMode() const { return mode_; }
+    void ToggleReverse() { reverse_ = !reverse_; }
+    void SetReverse(bool state) { reverse_ = state; }
+    bool GetReverse() const { return reverse_; }
+    void ToggleHalfSpeed() { half_speed_ = !half_speed_; }
+    void SetHalfSpeed(bool state) { half_speed_ = state; }
+    bool GetHalfSpeed() const { return half_speed_; }
+
+  private:
+    enum class State { EMPTY, REC_FIRST, PLAYING };
+    Mode state_mode_;
+    State state_;
+    Mode mode_;
+    float *buff_;
+    size_t buffer_size_;
+    float pos_;
+    size_t recsize_;
+    bool half_speed_, reverse_, recording_;
 };
 
 } // namespace daisysp
