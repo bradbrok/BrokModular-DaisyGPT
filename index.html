@@ -241,11 +241,40 @@
           <button class="btn btn-stop" id="btn-stop">&#x25a0; Stop</button>
         </div>
 
-        <!-- VU Meter -->
-        <div class="vu-meter">
-          <span class="vu-label">Level</span>
-          <div class="vu-bar-container">
-            <div class="vu-bar" id="vu-bar"></div>
+        <!-- Diagnostics -->
+        <div class="diag-group">
+          <div class="diag-header">
+            <span class="diag-title">Diagnostics</span>
+            <button class="btn diag-toggle-btn" id="btn-diag-toggle" title="Toggle view">Scope</button>
+          </div>
+          <div class="diag-view" id="diag-scope">
+            <canvas id="scope-canvas" width="280" height="100"></canvas>
+          </div>
+          <div class="diag-view hidden" id="diag-spectrum">
+            <canvas id="spectrum-canvas" width="280" height="100"></canvas>
+          </div>
+          <div class="diag-meters">
+            <div class="diag-meter-row">
+              <span class="diag-meter-label">L</span>
+              <div class="diag-meter-bar-container">
+                <div class="diag-meter-bar" id="meter-bar-l"></div>
+                <div class="diag-meter-peak" id="meter-peak-l"></div>
+              </div>
+              <span class="diag-clip-indicator" id="clip-l">CLIP</span>
+            </div>
+            <div class="diag-meter-row">
+              <span class="diag-meter-label">R</span>
+              <div class="diag-meter-bar-container">
+                <div class="diag-meter-bar" id="meter-bar-r"></div>
+                <div class="diag-meter-peak" id="meter-peak-r"></div>
+              </div>
+              <span class="diag-clip-indicator" id="clip-r">CLIP</span>
+            </div>
+          </div>
+          <div class="diag-stats">
+            <span id="diag-rms">RMS: --</span>
+            <span id="diag-peak">Pk: --</span>
+            <span id="diag-cpu">Lat: --</span>
           </div>
         </div>
       </div>

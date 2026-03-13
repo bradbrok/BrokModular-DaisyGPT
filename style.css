@@ -1310,14 +1310,24 @@ input[type="range"]::-webkit-slider-thumb:active {
   color: #000;
 }
 
-/* VU Meter */
-.vu-meter {
+/* Diagnostics */
+.diag-group {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
+  padding: 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 
-.vu-label {
+.diag-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.diag-title {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-dim);
@@ -1325,23 +1335,101 @@ input[type="range"]::-webkit-slider-thumb:active {
   letter-spacing: 0.5px;
 }
 
-.vu-bar-container {
-  height: 8px;
-  background: var(--knob-track);
-  border-radius: 4px;
-  overflow: hidden;
+.diag-toggle-btn {
+  font-size: 10px;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
 }
 
-.vu-bar {
+.diag-view {
+  width: 100%;
+}
+
+.diag-view canvas {
+  display: block;
+  width: 100%;
+  height: 100px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.diag-meters {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.diag-meter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.diag-meter-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  width: 10px;
+  text-align: center;
+}
+
+.diag-meter-bar-container {
+  flex: 1;
+  height: 6px;
+  background: var(--knob-track);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.diag-meter-bar {
   height: 100%;
   width: 0%;
   background: var(--vu-green);
-  border-radius: 4px;
+  border-radius: 3px;
   transition: width 0.05s linear;
 }
 
-.vu-bar.hot {
+.diag-meter-bar.hot {
   background: linear-gradient(90deg, var(--vu-green) 0%, var(--vu-yellow) 70%, var(--vu-red) 100%);
+}
+
+.diag-meter-peak {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 2px;
+  background: var(--accent-gold-bright);
+  left: 0%;
+  transition: left 0.05s linear;
+}
+
+.diag-clip-indicator {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  opacity: 0.3;
+  width: 26px;
+  text-align: center;
+}
+
+.diag-clip-indicator.active {
+  color: var(--accent-red);
+  opacity: 1;
+}
+
+.diag-stats {
+  display: flex;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.diag-stats span {
+  flex: 1;
 }
 
 /* Status bar */

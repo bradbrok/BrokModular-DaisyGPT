@@ -60,6 +60,13 @@ const state = {
   sampleLength: 0,
   samplePlaying: false,
   sampleLoop: true,
+  // Diagnostics
+  analyserNode: null,
+  diagAnimFrame: null,
+  peakLevel: 0,
+  peakHoldTime: 0,
+  clipDetected: false,
+  clipTime: 0,
 };
 
 // ─── DOM References ────────────────────────────────────────────────
@@ -1360,7 +1367,6 @@ async function startAudio() {
     state.workletNode.port.onmessage = (e) => {
       if (e.data.type === 'rms') {
         state.rmsLevel = e.data.level;
-        updateVuMeter();
       } else if (e.data.type === 'ready') {
         for (let i = 0; i < 4; i++) {
           state.workletNode.port.postMessage({ type: 'set-knob', index: i, value: state.knobs[i] });
@@ -1379,7 +1385,11 @@ async function startAudio() {
       }
     };
 
-    state.workletNode.connect(state.audioContext.destination);
+    state.analyserNode = state.audioContext.createAnalyser();
+    state.analyserNode.fftSize = 2048;
+    state.analyserNode.smoothingTimeConstant = 0.8;
+    state.workletNode.connect(state.analyserNode);
+    state.analyserNode.connect(state.audioContext.destination);
 
     state.workletNode.port.postMessage({
       type: 'load-wasm',
@@ -1390,6 +1400,7 @@ async function startAudio() {
     connectAudioInputToWorklet();
 
     state.isPlaying = true;
+    startDiagLoop();
     updateUI();
   } catch (err) {
     console.error('Audio start failed:', err);
@@ -1412,9 +1423,15 @@ function stopAudio() {
     state.workletNode = null;
   }
 
+  if (state.analyserNode) {
+    state.analyserNode.disconnect();
+    state.analyserNode = null;
+  }
+
+  stopDiagLoop();
+
   state.isPlaying = false;
   state.rmsLevel = 0;
-  updateVuMeter();
   updateUI();
 }
 
@@ -1506,13 +1523,213 @@ function updateKnobLabels() {
   }
 }
 
-function updateVuMeter() {
-  const bar = $('#vu-bar');
-  if (!bar) return;
-  const level = Math.min(state.rmsLevel * 3, 1);
-  const pct = level * 100;
-  bar.style.width = `${pct}%`;
-  bar.classList.toggle('hot', level > 0.6);
+// ─── Diagnostics ──────────────────────────────────────────────────
+
+const DIAG_VIEWS = ['scope', 'spectrum', 'both'];
+let diagViewIndex = 0;
+
+const diagTimeBuf = new Float32Array(2048);
+const diagFreqBuf = new Float32Array(1024);
+
+function initDiagnostics() {
+  const toggleBtn = $('#btn-diag-toggle');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      diagViewIndex = (diagViewIndex + 1) % DIAG_VIEWS.length;
+      const mode = DIAG_VIEWS[diagViewIndex];
+      toggleBtn.textContent = mode === 'scope' ? 'Scope' : mode === 'spectrum' ? 'FFT' : 'Both';
+      $('#diag-scope')?.classList.toggle('hidden', mode === 'spectrum');
+      $('#diag-spectrum')?.classList.toggle('hidden', mode === 'scope');
+    });
+  }
+}
+
+function startDiagLoop() {
+  if (state.diagAnimFrame) return;
+  function diagFrame() {
+    if (!state.isPlaying || !state.analyserNode) {
+      clearDiagDisplay();
+      state.diagAnimFrame = null;
+      return;
+    }
+    renderDiagnostics();
+    state.diagAnimFrame = requestAnimationFrame(diagFrame);
+  }
+  state.diagAnimFrame = requestAnimationFrame(diagFrame);
+}
+
+function stopDiagLoop() {
+  if (state.diagAnimFrame) {
+    cancelAnimationFrame(state.diagAnimFrame);
+    state.diagAnimFrame = null;
+  }
+  clearDiagDisplay();
+}
+
+function renderDiagnostics() {
+  const mode = DIAG_VIEWS[diagViewIndex];
+  if (mode === 'scope' || mode === 'both') renderScope();
+  if (mode === 'spectrum' || mode === 'both') renderSpectrum();
+  renderMeters();
+}
+
+function renderScope() {
+  const canvas = $('#scope-canvas');
+  if (!canvas || !state.analyserNode) return;
+
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+
+  state.analyserNode.getFloatTimeDomainData(diagTimeBuf);
+
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, w, h);
+
+  // Center line
+  ctx.strokeStyle = '#262626';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, h / 2);
+  ctx.lineTo(w, h / 2);
+  ctx.stroke();
+
+  // Find rising zero-crossing for trigger stability
+  let triggerIndex = 0;
+  for (let i = 1; i < diagTimeBuf.length - w; i++) {
+    if (diagTimeBuf[i - 1] <= 0 && diagTimeBuf[i] > 0) {
+      triggerIndex = i;
+      break;
+    }
+  }
+
+  // Waveform
+  ctx.strokeStyle = '#d4a843';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  const sliceLen = Math.min(w, diagTimeBuf.length - triggerIndex);
+  for (let i = 0; i < sliceLen; i++) {
+    const sample = diagTimeBuf[triggerIndex + i];
+    const x = (i / sliceLen) * w;
+    const y = (1 - sample) * h / 2;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+function renderSpectrum() {
+  const canvas = $('#spectrum-canvas');
+  if (!canvas || !state.analyserNode) return;
+
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+
+  state.analyserNode.getFloatFrequencyData(diagFreqBuf);
+
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, w, h);
+
+  const nyquist = 48000 / 2;
+  const logMin = Math.log10(20);
+  const logMax = Math.log10(nyquist);
+
+  for (let i = 0; i < w; i++) {
+    const logFreq = logMin + (i / w) * (logMax - logMin);
+    const freq = Math.pow(10, logFreq);
+    const binIndex = Math.round(freq / nyquist * diagFreqBuf.length);
+    if (binIndex >= diagFreqBuf.length) continue;
+
+    const dbValue = diagFreqBuf[binIndex];
+    const normalized = Math.max(0, (dbValue + 100) / 100);
+    const barHeight = normalized * h;
+
+    const brightness = Math.floor(normalized * 180 + 40);
+    ctx.fillStyle = `rgb(${brightness}, ${Math.floor(brightness * 0.65)}, ${Math.floor(brightness * 0.25)})`;
+    ctx.fillRect(i, h - barHeight, 1, barHeight);
+  }
+}
+
+function renderMeters() {
+  if (!state.analyserNode) return;
+
+  state.analyserNode.getFloatTimeDomainData(diagTimeBuf);
+
+  let sumSq = 0, peak = 0, clipped = false;
+  for (let i = 0; i < diagTimeBuf.length; i++) {
+    const s = diagTimeBuf[i];
+    const abs = Math.abs(s);
+    sumSq += s * s;
+    if (abs > peak) peak = abs;
+    if (abs >= 1.0) clipped = true;
+  }
+
+  const rms = Math.sqrt(sumSq / diagTimeBuf.length);
+  const rmsDb = rms > 0 ? (20 * Math.log10(rms)) : -Infinity;
+  const peakDb = peak > 0 ? (20 * Math.log10(peak)) : -Infinity;
+
+  // Scale: -60 dBFS = 0%, 0 dBFS = 100%
+  const rmsPct = Math.max(0, Math.min(100, ((rmsDb + 60) / 60) * 100));
+  const peakPct = Math.max(0, Math.min(100, ((peakDb + 60) / 60) * 100));
+
+  const barL = $('#meter-bar-l');
+  const barR = $('#meter-bar-r');
+  const peakIndL = $('#meter-peak-l');
+  const peakIndR = $('#meter-peak-r');
+
+  if (barL) { barL.style.width = rmsPct + '%'; barL.classList.toggle('hot', rmsPct > 80); }
+  if (barR) { barR.style.width = rmsPct + '%'; barR.classList.toggle('hot', rmsPct > 80); }
+  if (peakIndL) peakIndL.style.left = peakPct + '%';
+  if (peakIndR) peakIndR.style.left = peakPct + '%';
+
+  // Peak hold with decay
+  const now = performance.now();
+  if (peak > state.peakLevel) {
+    state.peakLevel = peak;
+    state.peakHoldTime = now;
+  } else if (now - state.peakHoldTime > 1500) {
+    state.peakLevel *= 0.95;
+  }
+
+  // Clip indicator (stays lit for 2s)
+  if (clipped) {
+    state.clipDetected = true;
+    state.clipTime = now;
+  }
+  const clipActive = state.clipDetected && (now - state.clipTime < 2000);
+  $('#clip-l')?.classList.toggle('active', clipActive);
+  $('#clip-r')?.classList.toggle('active', clipActive);
+  if (!clipActive) state.clipDetected = false;
+
+  // Stats text
+  const rmsEl = $('#diag-rms');
+  const peakEl = $('#diag-peak');
+  const cpuEl = $('#diag-cpu');
+  if (rmsEl) rmsEl.textContent = `RMS: ${rmsDb > -60 ? rmsDb.toFixed(1) : '-inf'} dB`;
+  if (peakEl) peakEl.textContent = `Pk: ${peakDb > -60 ? peakDb.toFixed(1) : '-inf'} dB`;
+  if (cpuEl && state.audioContext) {
+    const latMs = ((state.audioContext.baseLatency || 0) * 1000).toFixed(1);
+    cpuEl.textContent = `Lat: ${latMs}ms`;
+  }
+}
+
+function clearDiagDisplay() {
+  for (const id of ['scope-canvas', 'spectrum-canvas']) {
+    const c = $(`#${id}`);
+    if (c) {
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#0a0a0a';
+      ctx.fillRect(0, 0, c.width, c.height);
+    }
+  }
+  if ($('#meter-bar-l')) $('#meter-bar-l').style.width = '0%';
+  if ($('#meter-bar-r')) $('#meter-bar-r').style.width = '0%';
+  if ($('#meter-peak-l')) $('#meter-peak-l').style.left = '0%';
+  if ($('#meter-peak-r')) $('#meter-peak-r').style.left = '0%';
+  if ($('#diag-rms')) $('#diag-rms').textContent = 'RMS: --';
+  if ($('#diag-peak')) $('#diag-peak').textContent = 'Pk: --';
+  if ($('#diag-cpu')) $('#diag-cpu').textContent = 'Lat: --';
 }
 
 function setStatus(type, message) {
@@ -2379,6 +2596,9 @@ function init() {
 
   // MIDI Setup
   initMIDI();
+
+  // Diagnostics
+  initDiagnostics();
 
   // Migrate old single API key
   migrateOldKey();
