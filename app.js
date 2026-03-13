@@ -68,7 +68,7 @@ const state = {
   clipDetected: false,
   clipTime: 0,
   // Remote ARM compilation
-  remoteCompileUrl: localStorage.getItem('daisy-gpt-compile-url') || '',
+  remoteCompileUrl: localStorage.getItem('daisy-gpt-compile-url') || 'https://compile.brokmodular.com',
   isRemoteCompiling: false,
   armBinaryBytes: null,
   armTargetAddress: null,
