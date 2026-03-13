@@ -14,7 +14,7 @@ services:
       - /tmp:size=256M
     environment:
       - PORT=5000
-      - MAX_CONCURRENT=2
+      - MAX_CONCURRENT=5
       - MAX_PENDING=10
       - COMPILE_TIMEOUT=60
       - ALLOWED_ORIGINS=https://bradbrok.github.io

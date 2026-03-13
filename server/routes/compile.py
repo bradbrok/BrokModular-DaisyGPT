@@ -1,3 +1,4 @@
+import re
 import time
 from flask import Blueprint, request, jsonify, Response
 
@@ -8,6 +9,19 @@ from services.compiler import compile_code
 from services.queue import enqueue, QueueFullError
 
 compile_bp = Blueprint('compile', __name__)
+
+# Strip internal paths from compiler output
+_PATH_PATTERNS = [
+    (re.compile(r'/opt/daisy/libDaisy/'), 'libDaisy/'),
+    (re.compile(r'/opt/daisy/DaisySP/'), 'DaisySP/'),
+    (re.compile(r'/tmp/daisy-build-[a-zA-Z0-9_]+/'), ''),
+]
+
+
+def _scrub_stderr(stderr):
+    for pattern, replacement in _PATH_PATTERNS:
+        stderr = pattern.sub(replacement, stderr)
+    return stderr
 
 
 @compile_bp.route('/compile', methods=['POST'])
@@ -44,7 +58,7 @@ def compile_endpoint():
         stderr = parts[1] if len(parts) > 1 else error_info
         return jsonify({
             'error': 'compilation_failed',
-            'stderr': stderr,
+            'stderr': _scrub_stderr(stderr),
             'exit_code': 1
         }), 422
 

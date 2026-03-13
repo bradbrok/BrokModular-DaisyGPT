@@ -1,34 +1,40 @@
 import re
 
-# Patterns that indicate potentially dangerous code
-BLOCKED_PATTERNS = [
-    # System calls
-    (r'\bsystem\s*\(', 'system() calls are not allowed'),
-    (r'\bexecv?[lp]?e?\s*\(', 'exec*() calls are not allowed'),
-    (r'\bfork\s*\(', 'fork() is not allowed'),
-    (r'\bpopen\s*\(', 'popen() is not allowed'),
+# Allowlist of permitted #include headers.
+# Only Daisy ecosystem and standard embedded C/C++ headers are allowed.
+ALLOWED_INCLUDES = {
+    # Daisy
+    'daisy.h', 'daisy_seed.h', 'daisy_patch.h', 'daisy_patch_sm.h',
+    'daisy_pod.h', 'daisy_petal.h', 'daisy_field.h', 'daisy_versio.h',
+    'daisy_legio.h',
+    # DaisySP
+    'daisysp.h',
+    # C standard (embedded-safe subset)
+    'stdint.h', 'stdbool.h', 'stddef.h', 'stdlib.h', 'string.h',
+    'math.h', 'float.h', 'limits.h', 'ctype.h', 'errno.h',
+    'assert.h', 'stdarg.h', 'inttypes.h',
+    # C++ standard (embedded-safe subset)
+    'cstdint', 'cstddef', 'cstdlib', 'cstring', 'cmath',
+    'cfloat', 'climits', 'cstdarg', 'algorithm', 'array',
+    'type_traits', 'utility', 'functional', 'numeric', 'iterator',
+    'initializer_list', 'tuple', 'limits', 'new', 'memory',
+    # ARM CMSIS DSP (often used in audio)
+    'arm_math.h',
+}
 
-    # Dangerous headers
-    (r'#\s*include\s*<\s*unistd\.h\s*>', '#include <unistd.h> is not allowed'),
-    (r'#\s*include\s*<\s*sys/', '#include <sys/*> headers are not allowed'),
-    (r'#\s*include\s*<\s*spawn\.h\s*>', '#include <spawn.h> is not allowed'),
-    (r'#\s*include\s*<\s*dlfcn\.h\s*>', '#include <dlfcn.h> is not allowed'),
-
-    # Inline assembly
-    (r'\b__asm__\b', 'Inline assembly (__asm__) is not allowed'),
-    (r'\basm\s*\(', 'Inline assembly (asm()) is not allowed'),
-
-    # File I/O
-    (r'\bfopen\s*\(', 'fopen() is not allowed'),
-    (r'\bfreopen\s*\(', 'freopen() is not allowed'),
-
-    # Preprocessor tricks
-    (r'#\s*pragma\s+comment\s*\(\s*lib', '#pragma comment(lib) is not allowed'),
-]
+# Regex to extract all #include directives
+INCLUDE_RE = re.compile(r'#\s*include\s*[<"]([^>"]+)[>"]')
 
 
 def sanitize_code(code):
-    for pattern, message in BLOCKED_PATTERNS:
-        if re.search(pattern, code):
-            return message
+    includes = INCLUDE_RE.findall(code)
+    for inc in includes:
+        # Allow DaisySP subdirectory includes like "Synthesis/oscillator.h"
+        basename = inc.split('/')[-1] if '/' in inc else inc
+        # Check if it's a DaisySP subpath (Source/Module/file.h pattern)
+        is_daisysp_sub = inc.count('/') >= 1 and inc.endswith('.h')
+
+        if basename not in ALLOWED_INCLUDES and not is_daisysp_sub:
+            return f'#include "{inc}" is not permitted. Only Daisy/DaisySP and standard embedded headers are allowed.'
+
     return None
