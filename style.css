@@ -581,6 +581,8 @@ select {
 
 .file-viewer-content code {
   font-family: inherit;
+  background: transparent;
+  padding: 0;
 }
 
 /* ─── Edit Diff Blocks ───────────────────────────────────────── */

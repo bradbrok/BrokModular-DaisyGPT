@@ -98,6 +98,12 @@ When providing code, wrap it in a \`\`\`cpp code fence. Your code must:
 5. Implement \`int main(void)\` that calls \`patch.Init()\`, initializes DSP objects, and calls \`patch.StartAudio(AudioCallback)\`
 6. Map the 4 knobs (CTRL_1 through CTRL_4) to meaningful parameters using \`patch.GetKnobValue(DaisyPatch::CTRL_N)\`
 7. Use \`fmap()\` for knob scaling (with Mapping::LOG for frequency-like params)
+8. CRITICAL — KNOB LABELS: You MUST add a short descriptive \`// Label\` comment at the end of EVERY line that reads a CTRL_N knob. This comment becomes the knob label shown in the UI. Example:
+   \`float freq = fmap(patch.GetKnobValue(DaisyPatch::CTRL_1), 20.f, 2000.f, Mapping::LOG); // Frequency\`
+   \`float res  = fmap(patch.GetKnobValue(DaisyPatch::CTRL_2), 0.f, 0.95f);                 // Resonance\`
+   \`float mix  = patch.GetKnobValue(DaisyPatch::CTRL_3);                                    // Dry/Wet Mix\`
+   \`float vol  = patch.GetKnobValue(DaisyPatch::CTRL_4);                                    // Volume\`
+   Without these comments, the knobs display as generic "Knob 1", "Knob 2", etc. Always include them.
 
 IMPORTANT CODE CONSTRAINTS:
 - Always include COMPLETE, COMPILABLE code in your \`\`\`cpp blocks — never partial snippets
@@ -2353,20 +2359,25 @@ function openFileViewer(path) {
 
   state.viewingFile = path;
 
-  const editor = $('#code-editor');
-  const statusEl = $('#code-editor-status');
-  if (editor) {
-    editor.value = entry.content;
-    editor.readOnly = true;
-  }
-  if (statusEl) statusEl.textContent = path + ' (read-only)';
-  // Highlight the file content
-  const codeEl = $('#code-highlight-code');
+  // Show file in the Files tab viewer (not the Code tab)
+  const viewerWrap = $('#file-viewer-wrap');
+  const browser = $('#file-browser');
+  const pathEl = $('#file-viewer-path');
+  const codeEl = $('#file-viewer-code');
+
+  if (pathEl) pathEl.textContent = path;
   if (codeEl) {
+    // Detect language from file extension
+    const ext = path.split('.').pop().toLowerCase();
+    const langMap = { h: 'cpp', hpp: 'cpp', cpp: 'cpp', c: 'cpp', cc: 'cpp' };
+    const lang = langMap[ext] || '';
+    codeEl.className = lang ? `language-${lang}` : '';
     codeEl.textContent = entry.content + '\n';
     if (window.hljs) hljs.highlightElement(codeEl);
   }
-  switchTab('code');
+
+  if (browser) browser.classList.add('hidden');
+  if (viewerWrap) viewerWrap.classList.remove('hidden');
 }
 
 // Apply edit from chat inline button
@@ -2449,17 +2460,13 @@ function initCodePanel() {
     editor.addEventListener('keyup', updatePos);
   }
 
-  // File viewer close button — return to user code
+  // File viewer close button — return to file browser
   $('#file-viewer-close')?.addEventListener('click', () => {
     state.viewingFile = null;
-    if (state.code) {
-      syncCodeToEditor();
-    } else {
-      const ed = $('#code-editor');
-      if (ed) { ed.value = ''; ed.readOnly = false; }
-      const st = $('#code-editor-status');
-      if (st) st.textContent = 'patch.cpp';
-    }
+    const viewerWrap = $('#file-viewer-wrap');
+    const browser = $('#file-browser');
+    if (viewerWrap) viewerWrap.classList.add('hidden');
+    if (browser) browser.classList.remove('hidden');
   });
 }
 
