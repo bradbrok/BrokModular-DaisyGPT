@@ -643,23 +643,16 @@ function renderEditBlock(code) {
 
 function extractKnobLabels(code) {
   const labels = ['Knob 1', 'Knob 2', 'Knob 3', 'Knob 4'];
-  const patterns = [
-    /CTRL_1[^;]*?\/\/\s*(.+)/i,
-    /CTRL_2[^;]*?\/\/\s*(.+)/i,
-    /CTRL_3[^;]*?\/\/\s*(.+)/i,
-    /CTRL_4[^;]*?\/\/\s*(.+)/i,
-  ];
 
-  for (let i = 0; i < 4; i++) {
-    const match = code.match(patterns[i]);
-    if (match) labels[i] = match[1].trim().substring(0, 20);
-  }
-
-  const knobMapPattern = /(?:CTRL_|Knob\s*|knob\s*)(\d)[^]*?fmap\([^,]+,\s*[^)]+\);\s*\/\/\s*(.+)/gi;
-  let m;
-  while ((m = knobMapPattern.exec(code)) !== null) {
-    const idx = parseInt(m[1]) - 1;
-    if (idx >= 0 && idx < 4) labels[idx] = m[2].trim().substring(0, 20);
+  // Parse line-by-line to avoid cross-line regex mis-matches
+  for (const line of code.split('\n')) {
+    const m = line.match(/CTRL_(\d).*\/\/\s*(.+)/);
+    if (m) {
+      const idx = parseInt(m[1]) - 1;
+      if (idx >= 0 && idx < 4) {
+        labels[idx] = m[2].trim().substring(0, 20);
+      }
+    }
   }
 
   state.knobLabels = labels;
