@@ -1132,10 +1132,10 @@ async function selectAudioInputDevice(deviceId) {
   if (!deviceId) return;
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { deviceId: { exact: deviceId } }
-    });
+    const constraints = { audio: deviceId === 'default' ? true : { deviceId: { exact: deviceId } } };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
     state.audioInputStream = stream;
+    setStatus('success', 'Audio input: ' + (stream.getAudioTracks()[0]?.label || 'connected'));
 
     if (state.audioContext && state.workletNode) {
       state.audioInputSourceNode = state.audioContext.createMediaStreamSource(stream);

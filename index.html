@@ -206,12 +206,14 @@
             <select id="audio-in-device"><option value="">Select device...</option></select>
           </div>
           <div class="audio-in-sample hidden" id="sample-controls">
-            <input type="file" id="sample-file-input" accept="audio/*" class="hidden">
-            <button class="btn" id="btn-load-sample">Load Sample</button>
-            <span class="sample-file-name" id="sample-file-name">No file loaded</span>
+            <input type="file" id="sample-file-input" accept="audio/*" style="display:none">
+            <div class="sample-load-row">
+              <button class="btn" id="btn-load-sample">Load</button>
+              <span class="sample-file-name" id="sample-file-name">No file loaded</span>
+            </div>
             <div class="sample-transport">
               <button class="btn" id="btn-sample-play" disabled>Play</button>
-              <button class="btn btn-sample-loop active" id="btn-sample-loop" title="Loop">Loop</button>
+              <button class="btn btn-sample-loop active" id="btn-sample-loop" title="Toggle loop">Loop</button>
             </div>
             <div class="sample-position-container">
               <div class="sample-position-bar" id="sample-position-bar"></div>

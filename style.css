@@ -38,6 +38,10 @@
   box-sizing: border-box;
 }
 
+.hidden {
+  display: none !important;
+}
+
 html, body {
   height: 100%;
   background: var(--bg-primary);
@@ -1090,7 +1094,7 @@ input[type="range"]::-webkit-slider-thumb:active {
   cursor: help;
 }
 
-/* Audio In panel */
+/* Audio In panel — mirrors .midi-group */
 .audio-in-group {
   display: flex;
   flex-direction: column;
@@ -1123,16 +1127,10 @@ input[type="range"]::-webkit-slider-thumb:active {
   padding: 3px 6px;
 }
 
-.audio-in-live,
-.audio-in-sample {
+.audio-in-live {
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-
-.audio-in-live.hidden,
-.audio-in-sample.hidden {
-  display: none;
 }
 
 .audio-in-live select {
@@ -1141,10 +1139,23 @@ input[type="range"]::-webkit-slider-thumb:active {
   min-width: 80px;
 }
 
-#btn-load-sample {
+.audio-in-sample {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sample-load-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sample-load-row .btn {
   font-size: 11px;
   padding: 3px 8px;
   font-family: var(--font-mono);
+  flex-shrink: 0;
 }
 
 .sample-file-name {
@@ -1154,10 +1165,12 @@ input[type="range"]::-webkit-slider-thumb:active {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .sample-transport {
   display: flex;
+  align-items: center;
   gap: 6px;
 }
 
