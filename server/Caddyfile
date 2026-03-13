@@ -1,0 +1,3 @@
+compile.brokmodular.com {
+	reverse_proxy compiler:5000
+}

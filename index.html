@@ -234,6 +234,7 @@
         <div class="compiler-group">
           <button class="btn btn-compile" id="btn-compile" disabled>Compile C++</button>
           <button class="btn btn-load-compiler" id="btn-load-compiler">Load Compiler</button>
+          <button class="btn btn-arm-compile" id="btn-arm-compile" title="Compile ARM binary for Daisy hardware">Compile for Daisy</button>
         </div>
 
         <!-- Transport -->
@@ -320,6 +321,14 @@
         <button class="btn btn-test" data-provider="openrouter">Test</button>
         <span class="key-status" id="key-status-openrouter"></span>
       </div>
+    </div>
+
+    <div class="key-row">
+      <label>Compile Server</label>
+      <div class="key-input-row">
+        <input type="text" id="compile-server-url" placeholder="https://compile.brokmodular.com">
+      </div>
+      <div class="compile-server-hint">Remote ARM cross-compilation server for flashing real Daisy hardware.</div>
     </div>
 
     <div class="key-row" id="ollama-config-row">

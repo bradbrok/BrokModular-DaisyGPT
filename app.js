@@ -67,6 +67,11 @@ const state = {
   peakHoldTime: 0,
   clipDetected: false,
   clipTime: 0,
+  // Remote ARM compilation
+  remoteCompileUrl: localStorage.getItem('daisy-gpt-compile-url') || '',
+  isRemoteCompiling: false,
+  armBinaryBytes: null,
+  armTargetAddress: null,
 };
 
 // ─── DOM References ────────────────────────────────────────────────
@@ -738,6 +743,57 @@ async function loadCompiler() {
     setStatus('error', `Compiler load failed: ${err.message}`);
   } finally {
     state.compilerLoading = false;
+    updateUI();
+  }
+}
+
+// ─── Remote ARM Compilation ───────────────────────────────────────
+
+async function compileForDaisy() {
+  if (!state.code) {
+    setStatus('error', 'No code to compile');
+    return;
+  }
+  if (!state.remoteCompileUrl) {
+    setStatus('error', 'No compile server configured. Set it in API Keys settings.');
+    return;
+  }
+
+  state.isRemoteCompiling = true;
+  state.armBinaryBytes = null;
+  state.armTargetAddress = null;
+  updateUI();
+  setStatus('compiling', 'Compiling for Daisy hardware...');
+
+  try {
+    const url = state.remoteCompileUrl.replace(/\/+$/, '') + '/compile';
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: state.code, target: 'qspi' }),
+    });
+
+    if (response.ok) {
+      const buffer = await response.arrayBuffer();
+      state.armBinaryBytes = new Uint8Array(buffer);
+      state.armTargetAddress = response.headers.get('X-Target-Address') || '0x90040000';
+      const compileTime = response.headers.get('X-Compile-Time') || '?';
+      const binarySize = response.headers.get('X-Binary-Size') || state.armBinaryBytes.length;
+      setStatus('success', `ARM binary ready (${binarySize} bytes, ${compileTime}s) — click Flash to Daisy`);
+    } else {
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 429) {
+        setStatus('error', 'Rate limited — try again in a moment');
+      } else if (data.stderr) {
+        setStatus('error', `ARM compile failed:\n${data.stderr}`);
+      } else {
+        setStatus('error', data.message || `ARM compile failed (${response.status})`);
+      }
+    }
+  } catch (err) {
+    setStatus('error', `ARM compile error: ${err.message}`);
+  } finally {
+    state.isRemoteCompiling = false;
     updateUI();
   }
 }
@@ -1466,6 +1522,7 @@ function updateUI() {
   const downloadBtn = $('#btn-download');
   const compileBtn = $('#btn-compile');
   const loadCompilerBtn = $('#btn-load-compiler');
+  const armCompileBtn = $('#btn-arm-compile');
 
   const stopChatBtn = $('#btn-stop-chat');
   if (sendBtn) {
@@ -1480,7 +1537,7 @@ function updateUI() {
     playBtn.classList.toggle('playing', state.isPlaying);
     playBtn.textContent = state.isPlaying ? '\u25b6 Playing' : '\u25b6 Play';
   }
-  if (flashBtn) flashBtn.disabled = !state.compiled;
+  if (flashBtn) flashBtn.disabled = !state.armBinaryBytes;
   if (downloadBtn) downloadBtn.disabled = !state.code;
   if (compileBtn) {
     compileBtn.disabled = !state.code || state.isCompiling;
@@ -1498,6 +1555,10 @@ function updateUI() {
       loadCompilerBtn.textContent = 'Load Compiler';
       loadCompilerBtn.disabled = false;
     }
+  }
+  if (armCompileBtn) {
+    armCompileBtn.disabled = !state.code || !state.remoteCompileUrl || state.isRemoteCompiling;
+    armCompileBtn.textContent = state.isRemoteCompiling ? 'Compiling...' : 'Compile for Daisy';
   }
 }
 
@@ -1826,6 +1887,10 @@ function showApiKeyModal() {
     const ollamaUrlInput = $('#ollama-url');
     if (ollamaUrlInput) ollamaUrlInput.value = getOllamaUrl();
 
+    // Compile server URL
+    const compileUrlInput = $('#compile-server-url');
+    if (compileUrlInput) compileUrlInput.value = state.remoteCompileUrl;
+
     if (state.provider === 'ollama') {
       ollamaUrlInput?.focus();
     } else {
@@ -1849,7 +1914,15 @@ function saveAllKeys() {
   if (ollamaUrlInput) {
     setOllamaUrl(ollamaUrlInput.value.trim() || 'http://localhost:11434');
   }
+  // Save compile server URL
+  const compileUrlInput = $('#compile-server-url');
+  if (compileUrlInput) {
+    const url = compileUrlInput.value.trim().replace(/\/+$/, '');
+    state.remoteCompileUrl = url;
+    localStorage.setItem('daisy-gpt-compile-url', url);
+  }
   hideApiKeyModal();
+  updateUI();
 }
 
 async function testProviderKey(providerId) {
@@ -1978,11 +2051,16 @@ async function flashToDaisy() {
 
     await dfu.open();
 
-    dfu.log('Note: v0.1 flashes preview WASM only.');
-    dfu.log('For ARM binary, use "Download .cpp" and compile with daisy-gpt CLI.');
-
-    if (state.wasmBytes) {
-      await dfu.flash(state.wasmBytes.buffer);
+    if (state.armBinaryBytes) {
+      const addr = parseInt(state.armTargetAddress, 16) || 0x90040000;
+      dfu.log(`Flashing ARM binary (${state.armBinaryBytes.length} bytes) to ${state.armTargetAddress}...`);
+      await dfu.flash(state.armBinaryBytes.buffer, addr);
+    } else if (state.remoteCompileUrl && !state.armBinaryBytes) {
+      dfu.log('No ARM binary available. Click "Compile for Daisy" first.');
+      return;
+    } else {
+      dfu.log('No compile server configured. Set it in API Keys settings.');
+      return;
     }
 
     await dfu.close();
@@ -2593,6 +2671,11 @@ function init() {
   // Load compiler button
   $('#btn-load-compiler')?.addEventListener('click', () => {
     loadCompiler();
+  });
+
+  // ARM compile button
+  $('#btn-arm-compile')?.addEventListener('click', () => {
+    compileForDaisy();
   });
 
   // Code panel & tabs

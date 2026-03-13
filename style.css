@@ -1270,6 +1270,7 @@ input[type="range"]::-webkit-slider-thumb:active {
 /* Compiler */
 .compiler-group {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -1293,6 +1294,27 @@ input[type="range"]::-webkit-slider-thumb:active {
   opacity: 0.5;
   border-color: var(--accent-gold);
   color: var(--accent-gold);
+}
+
+.btn-arm-compile {
+  flex: 1;
+  padding: 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: #1a2a1a;
+  border-color: #3a6a3a;
+  color: #6abf6a;
+}
+
+.btn-arm-compile:hover:not(:disabled) {
+  background: #2a3a2a;
+  border-color: #5a9a5a;
+  color: #8adf8a;
+}
+
+.btn-arm-compile:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 /* Play/Stop */
@@ -1619,6 +1641,12 @@ input[type="range"]::-webkit-slider-thumb:active {
   font-size: 14px;
   min-width: 18px;
   text-align: center;
+}
+
+.compile-server-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
 }
 
 .ollama-hint {

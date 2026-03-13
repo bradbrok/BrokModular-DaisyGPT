@@ -1,0 +1,45 @@
+services:
+  compiler:
+    build: .
+    container_name: daisy-compiler
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 2.0
+    pids_limit: 100
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=256M
+    environment:
+      - PORT=5000
+      - MAX_CONCURRENT=2
+      - MAX_PENDING=10
+      - COMPILE_TIMEOUT=60
+      - ALLOWED_ORIGINS=https://bradbrok.github.io
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: daisy-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - internal
+    depends_on:
+      - compiler
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:
