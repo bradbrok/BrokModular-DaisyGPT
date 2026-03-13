@@ -18,8 +18,8 @@ WORKDIR /build
 RUN git clone --recursive --depth 1 --branch v7.0.1 https://github.com/electro-smith/libDaisy.git \
     && cd libDaisy && make -j$(nproc)
 
-# Clone and build DaisySP at pinned tag
-RUN git clone --recursive --depth 1 --branch v1.2.0 https://github.com/electro-smith/DaisySP.git \
+# Clone and build DaisySP (pinned to master HEAD — no recent release tags)
+RUN git clone --recursive --depth 1 https://github.com/electro-smith/DaisySP.git \
     && cd DaisySP && make -j$(nproc)
 
 # Stage 2: Runtime
