@@ -1212,6 +1212,39 @@ input[type="range"]::-webkit-slider-thumb:active {
   transition: width 0.05s linear;
 }
 
+/* Audio Out panel — mirrors .audio-in-group */
+.audio-out-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.audio-out-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audio-out-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.audio-out-header select {
+  flex: 1;
+  min-width: 80px;
+  font-size: 11px;
+  padding: 3px 6px;
+}
+
 /* Compiler */
 .compiler-group {
   display: flex;

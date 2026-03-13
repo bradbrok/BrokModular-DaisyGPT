@@ -1121,6 +1121,9 @@ async function enumerateAudioInputDevices() {
       opt.textContent = dev.label || ('Mic ' + sel.options.length);
       sel.appendChild(opt);
     }
+
+    // Also refresh output devices now that we have permission for labels
+    enumerateAudioOutputDevices();
   } catch (err) {
     console.warn('Could not enumerate audio devices:', err);
     setStatus('error', 'Mic access denied: ' + err.message);
@@ -1275,6 +1278,61 @@ function updateSampleTransportUI() {
   if (playBtn) {
     playBtn.textContent = state.samplePlaying ? 'Stop' : 'Play';
   }
+}
+
+// ─── Audio Output ─────────────────────────────────────────────────
+
+async function enumerateAudioOutputDevices() {
+  try {
+    // Need mic permission first to get labeled devices
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioOutputs = devices.filter(d => d.kind === 'audiooutput');
+
+    const sel = document.getElementById('audio-out-device');
+    if (!sel) return;
+    while (sel.options.length > 0) sel.remove(0);
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = 'System Default';
+    sel.appendChild(defaultOpt);
+    for (const dev of audioOutputs) {
+      const opt = document.createElement('option');
+      opt.value = dev.deviceId;
+      opt.textContent = dev.label || ('Output ' + sel.options.length);
+      sel.appendChild(opt);
+    }
+  } catch (err) {
+    console.warn('Could not enumerate output devices:', err);
+  }
+}
+
+async function selectAudioOutputDevice(deviceId) {
+  if (!state.audioContext) return;
+  try {
+    if (state.audioContext.setSinkId) {
+      await state.audioContext.setSinkId(deviceId || '');
+      const label = deviceId
+        ? (document.getElementById('audio-out-device')?.selectedOptions[0]?.textContent || 'selected')
+        : 'System Default';
+      setStatus('success', 'Audio out: ' + label);
+    } else {
+      setStatus('error', 'Browser does not support output device selection');
+    }
+  } catch (err) {
+    console.error('Failed to set audio output:', err);
+    setStatus('error', 'Output error: ' + err.message);
+  }
+}
+
+function initAudioOutput() {
+  const sel = document.getElementById('audio-out-device');
+  if (sel) {
+    sel.addEventListener('change', (e) => selectAudioOutputDevice(e.target.value));
+  }
+  // Populate on first click (devices may not have labels until mic permission granted)
+  sel?.addEventListener('focus', () => enumerateAudioOutputDevices(), { once: true });
+  // Also populate when audio input devices are enumerated (permission already granted)
+  enumerateAudioOutputDevices();
 }
 
 // ─── Audio Engine ──────────────────────────────────────────────────
@@ -2315,8 +2373,9 @@ function init() {
   // Code panel & tabs
   initCodePanel();
 
-  // Audio Input Setup
+  // Audio Input/Output Setup
   initAudioInput();
+  initAudioOutput();
 
   // MIDI Setup
   initMIDI();
