@@ -18,6 +18,17 @@ services:
       - MAX_PENDING=10
       - COMPILE_TIMEOUT=60
       - ALLOWED_ORIGINS=https://bradbrok.github.io
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: daisy-redis
+    restart: unless-stopped
+    mem_limit: 64m
     networks:
       - internal
 

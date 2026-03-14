@@ -11,6 +11,14 @@ LIBDAISY_DIR = '/opt/daisy/libDaisy'
 DAISYSP_DIR = '/opt/daisy/DaisySP'
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'template')
 
+def _scrub_stderr(stderr, tmpdir):
+    """Remove internal paths from compiler stderr before returning to user."""
+    stderr = stderr.replace(tmpdir, '<build-dir>')
+    stderr = stderr.replace('/opt/daisy/libDaisy', '<libDaisy>')
+    stderr = stderr.replace('/opt/daisy/DaisySP', '<DaisySP>')
+    return stderr
+
+
 TARGET_ADDRESSES = {
     'flash': '0x08000000',
     'qspi': '0x90040000',
@@ -45,12 +53,12 @@ def compile_code(code, target='flash'):
         )
 
         if result.returncode != 0:
-            raise RuntimeError(f'compilation_failed|||{result.stderr}')
+            raise RuntimeError(f'compilation_failed|||{_scrub_stderr(result.stderr, tmpdir)}')
 
         # Read the output binary
         bin_path = os.path.join(tmpdir, 'build', 'patch.bin')
         if not os.path.exists(bin_path):
-            raise RuntimeError(f'compilation_failed|||Binary not found at {bin_path}')
+            raise RuntimeError('compilation_failed|||Binary output not found')
 
         with open(bin_path, 'rb') as f:
             binary_data = f.read()

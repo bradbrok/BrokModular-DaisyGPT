@@ -18,9 +18,9 @@ WORKDIR /build
 RUN git clone --recursive --depth 1 --branch v7.0.1 https://github.com/electro-smith/libDaisy.git \
     && cd libDaisy && make -j$(nproc)
 
-# Clone and build DaisySP (pinned to master HEAD — no recent release tags)
-RUN git clone --recursive --depth 1 https://github.com/electro-smith/DaisySP.git \
-    && cd DaisySP && make -j$(nproc)
+# Clone and build DaisySP (pinned to specific commit — no recent release tags)
+RUN git clone --recursive https://github.com/electro-smith/DaisySP.git \
+    && cd DaisySP && git checkout 599511b740f8f3a9b8db72a0642aa45b8a23c3a3 && make -j$(nproc)
 
 # Stage 2: Runtime
 FROM ubuntu:22.04
