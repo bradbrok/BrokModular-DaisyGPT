@@ -4,7 +4,7 @@
 import { skills, skillNames } from './skills/index.js';
 import { DAISYSP_REFERENCE } from './reference/daisysp_ref.js';
 import { DaisyDFU, isWebUSBSupported, isChromeBrowser } from './dfu.js';
-import { PROVIDERS, getApiKey, setApiKey, migrateOldKey, getOllamaUrl, setOllamaUrl } from './providers.js';
+import { PROVIDERS, getApiKey, setApiKey, migrateOldKey, initKeyStore, getOllamaUrl, setOllamaUrl } from './providers.js';
 import { MIDIController } from './midi.js';
 import { WasmClangCompiler } from './compiler.js';
 
@@ -146,13 +146,13 @@ ${DAISYSP_REFERENCE}`;
 
 // ─── Chat / LLM ───────────────────────────────────────────────────
 
-function currentApiKey() {
+async function currentApiKey() {
   if (state.provider === 'ollama') return 'ollama';
-  return getApiKey(state.provider);
+  return await getApiKey(state.provider);
 }
 
 async function sendMessage(userText) {
-  if (!currentApiKey()) {
+  if (!(await currentApiKey())) {
     showApiKeyModal();
     return;
   }
@@ -223,7 +223,7 @@ Use cvToFreq() for frequency from MIDI pitch.\n\n` + systemPrompt;
   }
 
   try {
-    await provider.call(currentApiKey(), state.model, systemPrompt, state.messages, (token) => {
+    await provider.call(await currentApiKey(), state.model, systemPrompt, state.messages, (token) => {
       state.streamingContent += token;
       renderStreamingBubble(state.streamingMessageEl, state.streamingContent);
     }, state.abortController?.signal, callOptions);
@@ -807,7 +807,7 @@ function stopGeneration() {
 }
 
 async function autoFixCompileError(errorMsg) {
-  if (!currentApiKey()) return;
+  if (!(await currentApiKey())) return;
   if (state.abortController?.signal?.aborted) return;
   const editHint = state.code && state.code.split('\n').length > 20
     ? ' Use edit commands to fix just the broken parts rather than regenerating everything.'
@@ -1872,15 +1872,15 @@ async function refreshOllamaModels() {
 
 // ─── Modal Handlers ────────────────────────────────────────────────
 
-function showApiKeyModal() {
+async function showApiKeyModal() {
   const modal = $('#api-key-modal');
   if (modal) {
     modal.classList.remove('hidden');
     for (const [id] of Object.entries(PROVIDERS)) {
       const input = $(`#key-${id}`);
-      if (input) input.value = getApiKey(id);
+      if (input) input.value = await getApiKey(id);
       const status = $(`#key-status-${id}`);
-      if (status) status.textContent = getApiKey(id) ? '\u2713' : '';
+      if (status) status.textContent = (await getApiKey(id)) ? '\u2713' : '';
     }
     // Ollama URL field
     const ollamaUrlInput = $('#ollama-url');
@@ -1903,10 +1903,10 @@ function hideApiKeyModal() {
   if (modal) modal.classList.add('hidden');
 }
 
-function saveAllKeys() {
+async function saveAllKeys() {
   for (const id of Object.keys(PROVIDERS)) {
     const input = $(`#key-${id}`);
-    if (input) setApiKey(id, input.value.trim());
+    if (input) await setApiKey(id, input.value.trim());
   }
   // Save Ollama URL
   const ollamaUrlInput = $('#ollama-url');
@@ -2465,7 +2465,7 @@ function initCodePanel() {
 
 // ─── Event Binding ─────────────────────────────────────────────────
 
-function init() {
+async function init() {
   // Send button
   $('#btn-send')?.addEventListener('click', () => {
     const text = $('#chat-input')?.value?.trim();
@@ -2691,8 +2691,9 @@ function init() {
   // Diagnostics
   initDiagnostics();
 
-  // Migrate old single API key
-  migrateOldKey();
+  // Initialise encrypted key store and migrate old keys
+  await initKeyStore();
+  await migrateOldKey();
 
   // Set provider dropdown
   const providerSelect = $('#provider-select');
@@ -2703,7 +2704,7 @@ function init() {
   updateThinkingControls();
 
   // Show API key modal if no key
-  if (!currentApiKey()) {
+  if (!(await currentApiKey())) {
     setTimeout(showApiKeyModal, 500);
   }
 

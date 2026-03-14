@@ -1,6 +1,8 @@
 // daisy-gpt — multi-provider LLM support
 // Anthropic, OpenAI (Responses API), OpenRouter (Chat Completions), Ollama (Local)
 
+import { initCryptoStore, encryptValue, decryptValue, isEncryptedEnvelope } from './crypto-store.js';
+
 const OLLAMA_CORS_HINT = 'Cannot reach Ollama. Make sure it\'s running and started with OLLAMA_ORIGINS=* for browser access.';
 
 export const PROVIDERS = {
@@ -413,21 +415,43 @@ async function readSSE(response, onEvent) {
   }
 }
 
-// Get the current API key for a provider
-export function getApiKey(providerId) {
+// Initialise the encrypted key store (call once at startup)
+export async function initKeyStore() {
+  await initCryptoStore();
+}
+
+// Get the current API key for a provider (decrypts if needed)
+export async function getApiKey(providerId) {
   const provider = PROVIDERS[providerId];
   if (!provider) return '';
-  return localStorage.getItem(provider.keySlot) || '';
+  const raw = localStorage.getItem(provider.keySlot);
+  if (!raw) return '';
+
+  if (isEncryptedEnvelope(raw)) {
+    try {
+      return await decryptValue(raw);
+    } catch {
+      // Encryption key lost (IndexedDB cleared) — remove corrupt entry
+      localStorage.removeItem(provider.keySlot);
+      return '';
+    }
+  }
+  return raw;
 }
 
-// Save an API key for a provider
-export function setApiKey(providerId, key) {
+// Save an API key for a provider (encrypts before storing)
+export async function setApiKey(providerId, key) {
   const provider = PROVIDERS[providerId];
   if (!provider) return;
-  localStorage.setItem(provider.keySlot, key);
+  if (!key) {
+    localStorage.removeItem(provider.keySlot);
+    return;
+  }
+  const encrypted = await encryptValue(key);
+  localStorage.setItem(provider.keySlot, encrypted);
 }
 
-// Ollama URL helpers
+// Ollama URL helpers (not secrets — stay plaintext)
 export function getOllamaUrl() {
   return localStorage.getItem('daisy-gpt-ollama-url') || 'http://localhost:11434';
 }
@@ -436,10 +460,23 @@ export function setOllamaUrl(url) {
   localStorage.setItem('daisy-gpt-ollama-url', url.replace(/\/+$/, ''));
 }
 
-// Migrate old single key to anthropic slot
-export function migrateOldKey() {
+// Migrate old single key to anthropic slot + encrypt any plaintext keys
+export async function migrateOldKey() {
   const old = localStorage.getItem('daisy-gpt-api-key');
   if (old && !localStorage.getItem('daisy-gpt-anthropic-key')) {
     localStorage.setItem('daisy-gpt-anthropic-key', old);
   }
+
+  // Encrypt any remaining plaintext keys
+  for (const [, provider] of Object.entries(PROVIDERS)) {
+    if (!provider.keySlot) continue;
+    const raw = localStorage.getItem(provider.keySlot);
+    if (raw && !isEncryptedEnvelope(raw)) {
+      const encrypted = await encryptValue(raw);
+      localStorage.setItem(provider.keySlot, encrypted);
+    }
+  }
+
+  // Remove legacy key after migration
+  if (old) localStorage.removeItem('daisy-gpt-api-key');
 }
