@@ -31,6 +31,11 @@
         <option value="ollama">Ollama (Local)</option>
       </select>
       <select id="model-select"></select>
+      <select id="board-select" style="display:none" title="Target board">
+        <option value="patch">Daisy Patch</option>
+        <option value="seed">Daisy Seed</option>
+        <option value="patch_sm">Patch SM</option>
+      </select>
       <div class="thinking-controls" id="thinking-controls">
         <label class="toggle-label" title="Extended Thinking / Reasoning">
           <input type="checkbox" id="thinking-toggle">
@@ -164,6 +169,14 @@
         <div class="gate-group">
           <button class="gate-btn" id="gate-0">Gate 1</button>
           <button class="gate-btn" id="gate-1">Gate 2</button>
+        </div>
+
+        <!-- Encoder (Advanced Mode) -->
+        <div class="encoder-group" id="encoder-panel" style="display:none">
+          <span class="encoder-label">Encoder</span>
+          <button class="gate-btn" id="enc-ccw" title="Counter-clockwise">&#x25C0;</button>
+          <button class="gate-btn" id="enc-btn" title="Push button">&#x25CF;</button>
+          <button class="gate-btn" id="enc-cw" title="Clockwise">&#x25B6;</button>
         </div>
 
         <!-- MIDI -->
@@ -340,6 +353,15 @@
         <span class="key-status" id="key-status-ollama"></span>
       </div>
       <div class="ollama-hint">No API key needed. Start Ollama with <code>OLLAMA_ORIGINS=*</code> for browser access.</div>
+    </div>
+
+    <div class="advanced-mode-setting" style="margin: 12px 0; padding: 10px; border-top: 1px solid var(--border);">
+      <label class="toggle-label" title="Enable hardware peripheral support for building real Eurorack modules">
+        <input type="checkbox" id="advanced-mode-toggle">
+        <span class="toggle-switch"></span>
+        <span class="toggle-text">Advanced Mode</span>
+      </label>
+      <div class="ollama-hint">OLED displays, LEDs, rotary encoders, extra CV I/O, multi-board targeting (Seed / Patch SM)</div>
     </div>
 
     <div class="modal-buttons">

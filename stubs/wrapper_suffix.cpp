@@ -56,4 +56,18 @@ void setPitchCV(float cv) { daisy_pitch_cv = cv; }
 void setVelocity(float vel) { daisy_velocity = vel; }
 void setPitchBend(float pb) { daisy_pitchbend = pb; }
 
+// Hardware peripheral exports (Advanced Mode)
+void setEncoder(int position, int button) {
+    daisy_encoder_pos = position;
+    daisy_encoder_btn = (button != 0);
+}
+
+void setAdcExtra(int index, float value) {
+    if (index >= 0 && index < 8) daisy_adc_extra[index] = value;
+}
+
+uint8_t* getDisplayBuffer() { return daisy_display_buffer; }
+float* getLedState() { return daisy_led_state; }
+float* getDacOut() { return daisy_dac_out; }
+
 } // extern "C"

@@ -5,6 +5,7 @@ import { skills, skillNames } from './skills/index.js';
 import { DAISYSP_REFERENCE } from './reference/daisysp_ref.js';
 import { DaisyDFU, isWebUSBSupported, isChromeBrowser } from './dfu.js';
 import { PROVIDERS, getApiKey, setApiKey, migrateOldKey, initKeyStore, getOllamaUrl, setOllamaUrl } from './providers.js';
+import { DAISY_HW_REFERENCE } from './reference/daisy_hw_ref.js';
 import { MIDIController } from './midi.js';
 import { WasmClangCompiler } from './compiler.js';
 
@@ -42,6 +43,10 @@ const state = {
   compiledWithClang: false,
   // File registry for VFS browser
   fileRegistry: new Map(),
+  // Advanced Mode (hardware peripherals)
+  advancedMode: localStorage.getItem('daisy-gpt-advanced-mode') === 'true',
+  board: localStorage.getItem('daisy-gpt-board') || 'patch',
+  encoderPos: 0,
   // Thinking / reasoning
   thinkingEnabled: localStorage.getItem('daisy-gpt-thinking') === 'true',
   thinkingBudget: parseInt(localStorage.getItem('daisy-gpt-thinking-budget')) || 10000,
@@ -184,6 +189,21 @@ Use cvToFreq() for frequency from MIDI pitch.\n\n` + systemPrompt;
   }
   if (state.skill && skills[state.skill]) {
     systemPrompt += `\n\nSKILL CONTEXT (use this as a guide for the requested patch type):\n${skills[state.skill]}`;
+  }
+  if (state.advancedMode) {
+    const boardDescriptions = {
+      patch: 'DaisyPatch (4 knobs, 2 gates) — use daisy_patch.h, DaisyPatch class',
+      seed: 'DaisySeed (bare board, user wires all I/O) — use daisy_seed.h, DaisySeed class',
+      patch_sm: 'DaisyPatch SM (8 CV in, 2 CV out, 2 gate out) — use daisy_patch_sm.h, DaisyPatchSM class',
+    };
+    systemPrompt += `\n\nHARDWARE PERIPHERAL REFERENCE (Advanced Mode):\n${DAISY_HW_REFERENCE}`;
+    systemPrompt += `\n\nBOARD TARGETING:\nCurrent target board: ${boardDescriptions[state.board] || boardDescriptions.patch}
+Generate code for this board. When the board is "seed" or "patch_sm", use the corresponding class and header instead of DaisyPatch.
+HARDWARE CODE CONSTRAINTS:
+- OLED display: call display.Update() in the main loop timer, NEVER in AudioCallback
+- Encoders/switches: call Debounce() at a regular rate (1kHz), not in AudioCallback
+- DAC output: WriteValue() is safe in AudioCallback for CV output
+- Large display strings: use snprintf() with a small stack buffer`;
   }
   if (state.code) {
     systemPrompt += `\n\nCURRENT CODE (the user's active patch — reference or modify as needed):\n\`\`\`cpp\n${state.code}\n\`\`\``;
@@ -1512,6 +1532,39 @@ function restoreFromHistory(index) {
 
 // ─── UI Updates ────────────────────────────────────────────────────
 
+// ─── Advanced Mode ──────────────────────────────────────────────────
+
+const HW_SKILLS = new Set(['oled_display', 'led_indicator', 'encoder_input', 'cv_io_expander']);
+
+function populateSkillDropdown() {
+  const skillSelect = $('#skill-select');
+  if (!skillSelect) return;
+  skillSelect.innerHTML = '<option value="">No skill</option>';
+  for (const name of skillNames) {
+    if (HW_SKILLS.has(name) && !state.advancedMode) continue;
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name.replace(/_/g, ' ');
+    if (name === state.skill) opt.selected = true;
+    skillSelect.appendChild(opt);
+  }
+}
+
+function updateAdvancedModeUI() {
+  const boardSelect = $('#board-select');
+  const encoderPanel = $('#encoder-panel');
+  const toggle = $('#advanced-mode-toggle');
+
+  if (boardSelect) boardSelect.style.display = state.advancedMode ? '' : 'none';
+  if (encoderPanel) {
+    const hasEncoder = state.advancedMode && state.code && state.code.includes('Encoder');
+    encoderPanel.style.display = hasEncoder ? '' : 'none';
+  }
+  if (toggle) toggle.checked = state.advancedMode;
+
+  populateSkillDropdown();
+}
+
 function updateUI() {
   const sendBtn = $('#btn-send');
   const undoBtn = $('#btn-undo');
@@ -1565,6 +1618,13 @@ function updateKnobLabels() {
   for (let i = 0; i < 4; i++) {
     const label = $(`#knob-label-${i}`);
     if (label) label.textContent = state.knobLabels[i];
+  }
+
+  // Update encoder panel visibility based on code content
+  const encoderPanel = $('#encoder-panel');
+  if (encoderPanel) {
+    const hasEncoder = state.advancedMode && state.code && state.code.includes('Encoder');
+    encoderPanel.style.display = hasEncoder ? '' : 'none';
   }
 }
 
@@ -2611,6 +2671,48 @@ async function init() {
     localStorage.setItem('daisy-gpt-skill', state.skill);
   });
 
+  // Advanced Mode toggle
+  $('#advanced-mode-toggle')?.addEventListener('change', (e) => {
+    state.advancedMode = e.target.checked;
+    localStorage.setItem('daisy-gpt-advanced-mode', state.advancedMode);
+    updateAdvancedModeUI();
+  });
+
+  // Board selector
+  $('#board-select')?.addEventListener('change', (e) => {
+    state.board = e.target.value;
+    localStorage.setItem('daisy-gpt-board', state.board);
+  });
+  const boardSelect = $('#board-select');
+  if (boardSelect) boardSelect.value = state.board;
+
+  // Encoder buttons (Advanced Mode)
+  $('#enc-ccw')?.addEventListener('click', () => {
+    state.encoderPos--;
+    if (state.workletNode) {
+      state.workletNode.port.postMessage({ type: 'set-encoder', position: state.encoderPos, button: false });
+    }
+  });
+  $('#enc-cw')?.addEventListener('click', () => {
+    state.encoderPos++;
+    if (state.workletNode) {
+      state.workletNode.port.postMessage({ type: 'set-encoder', position: state.encoderPos, button: false });
+    }
+  });
+  const encBtn = $('#enc-btn');
+  if (encBtn) {
+    encBtn.addEventListener('mousedown', () => {
+      if (state.workletNode) {
+        state.workletNode.port.postMessage({ type: 'set-encoder', position: state.encoderPos, button: true });
+      }
+    });
+    encBtn.addEventListener('mouseup', () => {
+      if (state.workletNode) {
+        state.workletNode.port.postMessage({ type: 'set-encoder', position: state.encoderPos, button: false });
+      }
+    });
+  }
+
   // Knob sliders
   for (let i = 0; i < 4; i++) {
     const slider = $(`#knob-${i}`);
@@ -2648,18 +2750,8 @@ async function init() {
     }
   }
 
-  // Populate skill dropdown
-  const skillSelect = $('#skill-select');
-  if (skillSelect) {
-    skillSelect.innerHTML = '<option value="">No skill</option>';
-    for (const name of skillNames) {
-      const opt = document.createElement('option');
-      opt.value = name;
-      opt.textContent = name.replace(/_/g, ' ');
-      if (name === state.skill) opt.selected = true;
-      skillSelect.appendChild(opt);
-    }
-  }
+  // Populate skill dropdown (filter hardware skills by Advanced Mode)
+  populateSkillDropdown();
 
   // Compile button
   $('#btn-compile')?.addEventListener('click', async () => {
@@ -2699,9 +2791,10 @@ async function init() {
   const providerSelect = $('#provider-select');
   if (providerSelect) providerSelect.value = state.provider;
 
-  // Populate model dropdown and thinking controls
+  // Populate model dropdown, thinking controls, and advanced mode UI
   populateModelDropdown();
   updateThinkingControls();
+  updateAdvancedModeUI();
 
   // Show API key modal if no key
   if (!(await currentApiKey())) {
