@@ -1,13 +1,20 @@
 #pragma once
-// Browser stub — replaces daisy_patch.h for WASM compilation
+// Browser stub — replaces daisy_patch.h / daisy_seed.h / daisy_patch_sm.h for WASM compilation
 // Knob values and gate state are written by JS glue before each AudioCallback
 
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
+#include <cstdio>
 
 // Stub out SDRAM attribute (not relevant in browser)
 #define DSY_SDRAM_BSS
+
+// Pin type used throughout libDaisy
+struct Pin {
+    uint8_t port;
+    uint8_t pin;
+};
 
 namespace daisy {
     // Minimal AudioHandle types for compatibility
@@ -26,6 +33,14 @@ extern "C" {
     extern float daisy_velocity;      // 0.0-1.0
     extern float daisy_pitchbend;     // -1.0 to 1.0
     extern float daisy_cv_in[4];      // CV inputs (general purpose)
+
+    // Hardware peripheral state (browser simulation)
+    extern int     daisy_encoder_pos;
+    extern bool    daisy_encoder_btn;
+    extern uint8_t daisy_display_buffer[1024];  // 128x64 monochrome
+    extern float   daisy_led_state[8];
+    extern float   daisy_dac_out[2];
+    extern float   daisy_adc_extra[8];
 }
 
 // Convert 1V/Oct CV to frequency (C4=0.0 → 261.63Hz, A4=0.75 → 440Hz)
@@ -1039,4 +1054,235 @@ struct DaisyPatch {
     void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
                              daisy::AudioHandle::OutputBuffer, size_t)) {}
     void StartAudio(void (*)(float**, float**, size_t)) {}
+};
+
+// ─── Hardware Peripheral Stubs (Advanced Mode) ─────────────────────
+
+// System timer stub
+struct System {
+    static uint32_t GetNow() { return 0; }
+    static void Delay(uint32_t) {}
+    static uint32_t GetUs() { return 0; }
+    static uint32_t GetTickFreq() { return 1000; }
+};
+
+// GPIO stub
+struct GPIO {
+    enum Mode { INPUT, OUTPUT, OPEN_DRAIN };
+    void Init(Pin, Mode) {}
+    bool Read() { return false; }
+    void Write(bool) {}
+    void Toggle() {}
+};
+
+// DAC stub (2 channels, 12-bit)
+struct DacHandle {
+    enum Channel { DAC_CHN_1, DAC_CHN_2, DAC_CHN_BOTH };
+    struct Config {};
+    void Init(Config) {}
+    void WriteValue(Channel chn, uint16_t val) {
+        if (chn == DAC_CHN_1 || chn == DAC_CHN_BOTH)
+            daisy_dac_out[0] = static_cast<float>(val) / 4095.f;
+        if (chn == DAC_CHN_2 || chn == DAC_CHN_BOTH)
+            daisy_dac_out[1] = static_cast<float>(val) / 4095.f;
+    }
+    void Start() {}
+};
+
+// ADC stub
+struct AdcChannelConfig {
+    void InitSingle(Pin) {}
+    void InitMux(Pin, size_t, Pin*) {}
+};
+
+struct AdcHandle {
+    void Init(AdcChannelConfig*, size_t) {}
+    void Start() {}
+    float GetFloat(uint8_t chn) {
+        if (chn < 8) return daisy_adc_extra[chn];
+        return 0.f;
+    }
+    float GetMuxFloat(uint8_t, uint8_t chn) {
+        if (chn < 8) return daisy_adc_extra[chn];
+        return 0.f;
+    }
+};
+
+// Font stub
+struct FontDef {
+    uint8_t width;
+    uint8_t height;
+};
+inline FontDef Font_4x5  = {4, 5};
+inline FontDef Font_6x8  = {6, 8};
+inline FontDef Font_7x10 = {7, 10};
+inline FontDef Font_11x18 = {11, 18};
+inline FontDef Font_16x26 = {16, 26};
+
+// Rectangle stub
+struct Rectangle {
+    uint8_t x, y, width, height;
+};
+
+// Alignment enum
+enum Alignment { LEFT, CENTER, RIGHT };
+
+// OLED display driver stub
+struct SSD130x4WireSpi128x64Driver {
+    struct Config {
+        struct {
+            struct {
+                Pin dc;
+                Pin reset;
+            } pin_config;
+        } transport_config;
+    };
+};
+
+// OLED display stub — all draw calls are no-ops in browser
+template<typename Driver>
+struct OledDisplay {
+    struct Config {
+        typename Driver::Config driver_config;
+    };
+    void Init(Config) {}
+    void Fill(bool) {}
+    void DrawPixel(uint8_t, uint8_t, bool) {}
+    void DrawLine(uint8_t, uint8_t, uint8_t, uint8_t, bool) {}
+    void DrawRect(uint8_t, uint8_t, uint8_t, uint8_t, bool, bool fill = false) {}
+    void DrawCircle(uint8_t, uint8_t, uint8_t, bool) {}
+    void SetCursor(uint8_t, uint8_t) {}
+    void WriteString(const char*, FontDef, bool) {}
+    void WriteStringAligned(const char*, FontDef, Rectangle, Alignment, bool) {}
+    void Update() {}
+};
+
+// LED stub (PWM brightness)
+struct Led {
+    void Init(Pin, bool invert = false, float sr = 1000.f) {}
+    void Set(float brightness) {}
+    void Update() {}
+};
+
+// Encoder stub
+struct Encoder {
+    int last_pos_ = 0;
+    void Init(Pin, Pin, Pin, float rate = 1000.f) { last_pos_ = daisy_encoder_pos; }
+    void Debounce() {}
+    int Increment() {
+        int delta = daisy_encoder_pos - last_pos_;
+        last_pos_ = daisy_encoder_pos;
+        return delta;
+    }
+    bool Pressed() { return daisy_encoder_btn; }
+    bool FallingEdge() { return false; }
+    bool RisingEdge() { return false; }
+    float TimeHeldMs() { return 0.f; }
+};
+
+// Switch stub
+struct Switch {
+    enum Type { TYPE_TOGGLE, TYPE_MOMENTARY };
+    enum Polarity { POLARITY_NORMAL, POLARITY_INVERTED };
+    void Init(Pin, float = 1000.f, Type = TYPE_MOMENTARY, Polarity = POLARITY_NORMAL) {}
+    void Debounce() {}
+    bool Pressed() { return false; }
+    bool FallingEdge() { return false; }
+    bool RisingEdge() { return false; }
+    float TimeHeldMs() { return 0.f; }
+};
+
+// I2C stub
+struct I2CHandle {
+    enum Speed { I2C_100KHZ, I2C_400KHZ, I2C_1MHZ };
+    enum Periph { I2C_1, I2C_2 };
+    struct Config {
+        Periph periph;
+        Speed speed;
+        struct { Pin scl; Pin sda; } pin_config;
+    };
+    void Init(Config) {}
+    int TransmitBlocking(uint16_t, uint8_t*, uint16_t, uint32_t) { return 0; }
+    int ReceiveBlocking(uint16_t, uint8_t*, uint16_t, uint32_t) { return 0; }
+};
+
+// SPI stub
+struct SpiHandle {
+    struct Config {};
+    void Init(Config) {}
+    int BlockingTransmit(uint8_t*, size_t, uint32_t) { return 0; }
+};
+
+// TimerHandle stub
+struct TimerHandle {
+    struct Config { int periph; int dir; uint32_t period; };
+    void Init(Config) {}
+    void Start() {}
+    void SetCallback(void(*)(void)) {}
+    void SetPeriod(uint32_t) {}
+};
+
+// DaisySeed stub
+struct DaisySeed {
+    AdcHandle  adc;
+    DacHandle  dac;
+
+    void Init(bool boost = false) {
+        for (int i = 0; i < 4; i++) daisy_knob[i] = 0.5f;
+    }
+    void SetAudioBlockSize(int) {}
+    float AudioSampleRate() const { return daisy_sample_rate; }
+    void StartAdc() {}
+    void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
+                             daisy::AudioHandle::OutputBuffer, size_t)) {}
+    void StartAudio(void (*)(float**, float**, size_t)) {}
+
+    Pin GetPin(int n) const { return {0, static_cast<uint8_t>(n)}; }
+    Pin GetPin(int port, int pin) const { return {static_cast<uint8_t>(port), static_cast<uint8_t>(pin)}; }
+
+    // Named pin constants
+    static constexpr Pin A0  = {0, 0},  A1  = {0, 1},  A2  = {0, 2},  A3  = {0, 3};
+    static constexpr Pin A4  = {0, 4},  A5  = {0, 5},  A6  = {0, 6},  A7  = {0, 7};
+    static constexpr Pin A8  = {0, 8},  A9  = {0, 9},  A10 = {0, 10}, A11 = {0, 11};
+    static constexpr Pin D0  = {1, 0},  D1  = {1, 1},  D2  = {1, 2},  D3  = {1, 3};
+    static constexpr Pin D4  = {1, 4},  D5  = {1, 5},  D6  = {1, 6},  D7  = {1, 7};
+    static constexpr Pin D8  = {1, 8},  D9  = {1, 9},  D10 = {1, 10}, D11 = {1, 11};
+    static constexpr Pin D12 = {1, 12}, D13 = {1, 13}, D14 = {1, 14}, D15 = {1, 15};
+    static constexpr Pin D16 = {1, 16}, D17 = {1, 17}, D18 = {1, 18}, D19 = {1, 19};
+    static constexpr Pin D20 = {1, 20}, D21 = {1, 21}, D22 = {1, 22}, D23 = {1, 23};
+    static constexpr Pin D24 = {1, 24}, D25 = {1, 25}, D26 = {1, 26}, D27 = {1, 27};
+    static constexpr Pin D28 = {1, 28}, D29 = {1, 29}, D30 = {1, 30};
+};
+
+// DaisyPatchSM stub
+struct DaisyPatchSM {
+    AdcHandle  adc;
+    DacHandle  dac;
+
+    void Init() {
+        for (int i = 0; i < 4; i++) daisy_knob[i] = 0.5f;
+    }
+    void SetAudioBlockSize(int) {}
+    float AudioSampleRate() const { return daisy_sample_rate; }
+    void StartAdc() {}
+    void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
+                             daisy::AudioHandle::OutputBuffer, size_t)) {}
+    void StartAudio(void (*)(float**, float**, size_t)) {}
+    float GetAdcValue(int chn) {
+        if (chn < 8) return daisy_adc_extra[chn];
+        return 0.f;
+    }
+
+    static constexpr Pin A1  = {0, 1},  A2  = {0, 2},  A3  = {0, 3},  A4  = {0, 4};
+    static constexpr Pin A5  = {0, 5},  A6  = {0, 6},  A7  = {0, 7},  A8  = {0, 8};
+    static constexpr Pin A9  = {0, 9};
+    static constexpr Pin B1  = {1, 1},  B2  = {1, 2},  B3  = {1, 3},  B4  = {1, 4};
+    static constexpr Pin B5  = {1, 5},  B6  = {1, 6},  B7  = {1, 7},  B8  = {1, 8};
+    static constexpr Pin B9  = {1, 9},  B10 = {1, 10};
+    static constexpr Pin C1  = {2, 1},  C2  = {2, 2},  C3  = {2, 3},  C4  = {2, 4};
+    static constexpr Pin C5  = {2, 5},  C6  = {2, 6},  C7  = {2, 7},  C8  = {2, 8};
+    static constexpr Pin C9  = {2, 9},  C10 = {2, 10};
+    static constexpr Pin D1  = {3, 1},  D2  = {3, 2},  D3  = {3, 3},  D4  = {3, 4};
+    static constexpr Pin D5  = {3, 5},  D6  = {3, 6},  D7  = {3, 7},  D8  = {3, 8};
+    static constexpr Pin D9  = {3, 9},  D10 = {3, 10};
 };

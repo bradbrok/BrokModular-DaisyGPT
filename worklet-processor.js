@@ -57,6 +57,14 @@ class DaisyProcessor extends AudioWorkletProcessor {
         if (this.wasmInstance && this.wasmInstance.exports.setPitchBend) {
           this.wasmInstance.exports.setPitchBend(this.pitchBend);
         }
+      } else if (type === 'set-encoder') {
+        if (this.wasmInstance && this.wasmInstance.exports.setEncoder) {
+          this.wasmInstance.exports.setEncoder(e.data.position, e.data.button ? 1 : 0);
+        }
+      } else if (type === 'set-adc-extra') {
+        if (this.wasmInstance && this.wasmInstance.exports.setAdcExtra) {
+          this.wasmInstance.exports.setAdcExtra(e.data.index, e.data.value);
+        }
       } else if (type === 'midi-cc') {
         if (this.wasmInstance) {
           this.wasmInstance.exports.setKnob(e.data.knobIndex, e.data.value);
