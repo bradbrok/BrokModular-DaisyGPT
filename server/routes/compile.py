@@ -33,18 +33,27 @@ def compile_endpoint():
         return jsonify({'error': 'validation_failed', 'message': error}), 400
 
     data = request.get_json()
-    code = data['code']
     target = data.get('target', 'flash')
+    board = data.get('board', 'patch')
 
-    # Sanitize code
-    rejection = sanitize_code(code)
-    if rejection:
-        return jsonify({'error': 'code_rejected', 'message': rejection}), 400
+    # Support both single-file (legacy) and multi-file projects
+    if 'files' in data and isinstance(data['files'], dict):
+        files = data['files']
+    elif 'code' in data:
+        files = {'main.cpp': data['code']}
+    else:
+        return jsonify({'error': 'validation_failed', 'message': 'Missing code or files'}), 400
+
+    # Sanitize all files
+    for filename, code in files.items():
+        rejection = sanitize_code(code)
+        if rejection:
+            return jsonify({'error': 'code_rejected', 'message': f'{filename}: {rejection}'}), 400
 
     # Enqueue compilation
     try:
         start = time.time()
-        result = enqueue(lambda: compile_code(code, target))
+        result = enqueue(lambda: compile_code(files, target, board))
         elapsed = time.time() - start
     except QueueFullError:
         return jsonify({'error': 'queue_full', 'message': 'Server busy, try again shortly'}), 429, {

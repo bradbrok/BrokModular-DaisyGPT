@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>daisy-gpt — AI Synth Patch Generator</title>
+  <title>daisy-gpt — AI Daisy Development Platform</title>
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/monokai-sublime.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -22,8 +22,9 @@
 
   <!-- Header -->
   <div class="header">
-    <div class="logo"><img src="BrokLogoSmall.avif" alt="Brok" class="brok-logo">daisy-gpt <span>browser</span></div>
+    <div class="logo"><img src="BrokLogoSmall.avif" alt="Brok" class="brok-logo">daisy-gpt <span>platform</span></div>
     <div class="header-controls">
+      <select id="board-select" title="Daisy Board"></select>
       <select id="provider-select">
         <option value="anthropic">Anthropic</option>
         <option value="openai">OpenAI</option>
@@ -53,7 +54,10 @@
       <select id="skill-select">
         <option value="">No skill</option>
       </select>
+      <button class="btn btn-icon" id="btn-projects" title="Projects">&#x1f4c1;</button>
       <button class="btn btn-icon" id="btn-history" title="Patch History">&#x1f4cb;</button>
+      <button class="btn btn-icon" id="btn-export-zip" title="Export Project (.zip)">&#x1f4e6;</button>
+      <button class="btn btn-icon" id="btn-import-zip" title="Import Project (.zip)">&#x1f4c2;</button>
       <button class="btn btn-icon" id="btn-api-key" title="API Keys">&#x2699;</button>
     </div>
   </div>
@@ -81,8 +85,8 @@
         <div class="chat-messages" id="chat-messages">
           <div class="chat-welcome">
             <div class="chat-welcome-logo">daisy-gpt</div>
-            <p>I'm your Daisy Patch programming assistant. Describe a synth patch and I'll write the code, compile it, and let you play it right here.</p>
-            <p class="chat-welcome-hint">Try: "acid bassline with resonant filter and portamento"</p>
+            <p>I'm your AI pair programmer for Electro-Smith Daisy. Describe what you want to build and I'll help you code it, compile it, and play it right here.</p>
+            <p class="chat-welcome-hint">Try: "acid bassline with resonant filter" or "help me build a reverb pedal for Petal"</p>
           </div>
         </div>
         <div class="chat-input-area">
@@ -286,6 +290,7 @@
   <!-- Status bar -->
   <div class="status-bar">
     <span class="status-text" id="status-text">Ready</span>
+    <span class="profiler-status" id="profiler-status" title="Performance estimate"></span>
     <button class="btn btn-flash" id="btn-flash" disabled>&#x26a1; Flash to Daisy</button>
   </div>
 </div>
@@ -358,6 +363,68 @@
       <button class="btn btn-icon" id="btn-close-history">&#x2715;</button>
     </div>
     <div class="history-list" id="history-list"></div>
+  </div>
+</div>
+
+<!-- Projects panel -->
+<div class="projects-overlay hidden" id="projects-overlay">
+  <div class="projects-panel">
+    <div class="projects-header">
+      <h2>Projects</h2>
+      <div class="projects-header-actions">
+        <button class="btn btn-small" id="btn-new-project" title="New Project">+ New</button>
+        <button class="btn btn-icon" id="btn-close-projects">&#x2715;</button>
+      </div>
+    </div>
+    <div class="projects-current" id="projects-current">
+      <div class="projects-current-label">Current Project</div>
+      <div class="projects-current-name">
+        <input type="text" id="project-name-input" class="project-name-input" placeholder="Project name..." spellcheck="false">
+        <span class="project-board-badge" id="project-board-badge"></span>
+      </div>
+    </div>
+    <div class="projects-actions">
+      <button class="btn btn-small" id="btn-duplicate-project">Duplicate</button>
+      <button class="btn btn-small" id="btn-share-url" title="Copy shareable URL">Share URL</button>
+      <button class="btn btn-small" id="btn-share-gist" title="Share on GitHub Gist">Share Gist</button>
+      <button class="btn btn-small" id="btn-import-gist" title="Import from GitHub Gist">Import Gist</button>
+    </div>
+    <div class="projects-list-header">Saved Projects</div>
+    <div class="projects-list" id="projects-list"></div>
+  </div>
+</div>
+
+<!-- Gist modal -->
+<div class="modal-overlay hidden" id="gist-modal">
+  <div class="modal modal-gist">
+    <h2 id="gist-modal-title">Share on GitHub Gist</h2>
+    <div class="key-row">
+      <label>GitHub Token</label>
+      <div class="key-input-row">
+        <input type="password" id="gist-token" placeholder="ghp_...">
+      </div>
+      <div class="compile-server-hint">Needs <code>gist</code> scope. <a href="https://github.com/settings/tokens/new?scopes=gist&description=daisy-gpt" target="_blank" rel="noopener">Create token</a></div>
+    </div>
+    <div class="key-row hidden" id="gist-import-row">
+      <label>Gist URL or ID</label>
+      <div class="key-input-row">
+        <input type="text" id="gist-import-url" placeholder="https://gist.github.com/... or gist ID">
+      </div>
+    </div>
+    <div class="key-row" id="gist-public-row">
+      <label class="toggle-label">
+        <input type="checkbox" id="gist-public">
+        <span class="toggle-switch"></span>
+        <span class="toggle-text">Public gist</span>
+      </label>
+    </div>
+    <div class="gist-result hidden" id="gist-result">
+      <a id="gist-result-link" href="#" target="_blank" rel="noopener"></a>
+    </div>
+    <div class="modal-buttons">
+      <button class="btn" id="btn-cancel-gist">Cancel</button>
+      <button class="btn btn-save" id="btn-confirm-gist">Share</button>
+    </div>
   </div>
 </div>
 
