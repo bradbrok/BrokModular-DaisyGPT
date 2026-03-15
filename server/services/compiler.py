@@ -17,13 +17,28 @@ TARGET_ADDRESSES = {
 }
 
 
-def compile_code(code, target='flash'):
+def compile_code(files, target='flash', board='patch'):
+    """Compile source files for Daisy hardware.
+
+    Args:
+        files: dict of {filename: content} or legacy single string
+        target: 'flash' or 'qspi'
+        board: board type for future board-specific builds
+    """
+    # Legacy support: if files is a string, wrap it
+    if isinstance(files, str):
+        files = {'main.cpp': files}
+
     tmpdir = tempfile.mkdtemp(prefix='daisy-build-')
 
     try:
-        # Write user code
-        with open(os.path.join(tmpdir, 'patch.cpp'), 'w') as f:
-            f.write(code)
+        # Write all user source files
+        for filename, content in files.items():
+            filepath = os.path.join(tmpdir, filename)
+            # Create subdirectories if needed
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            with open(filepath, 'w') as f:
+                f.write(content)
 
         # Copy Makefile template
         shutil.copy(os.path.join(TEMPLATE_DIR, 'Makefile'), tmpdir)
@@ -34,6 +49,11 @@ def compile_code(code, target='flash'):
         env['DAISYSP_DIR'] = DAISYSP_DIR
         if target == 'qspi':
             env['BOOT_TARGET'] = 'qspi'
+
+        # For multi-file projects, set CPP_SOURCES explicitly
+        cpp_files = [f for f in files.keys() if f.endswith('.cpp') or f.endswith('.cc')]
+        if cpp_files:
+            env['CPP_SOURCES'] = ' '.join(cpp_files)
 
         # Run make
         result = subprocess.run(

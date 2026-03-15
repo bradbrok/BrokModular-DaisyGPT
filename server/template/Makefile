@@ -11,8 +11,8 @@ BOOT_TARGET ?= flash
 # Optimization
 OPT = -O2
 
-# Sources
-CPP_SOURCES = patch.cpp
+# Sources — auto-detect all .cpp files (supports multi-file projects)
+CPP_SOURCES ?= $(wildcard *.cpp)
 
 # Toolchain
 PREFIX = arm-none-eabi-

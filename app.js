@@ -1,4 +1,4 @@
-// daisy-gpt browser edition — conversational agent interface
+// daisy-gpt browser edition — AI-powered Daisy development platform
 // No framework, no build step. Pure vanilla JS.
 
 import { skills, skillNames } from './skills/index.js';
@@ -7,6 +7,12 @@ import { DaisyDFU, isWebUSBSupported, isChromeBrowser } from './dfu.js';
 import { PROVIDERS, getApiKey, setApiKey, migrateOldKey, initKeyStore, getOllamaUrl, setOllamaUrl } from './providers.js';
 import { MIDIController } from './midi.js';
 import { WasmClangCompiler } from './compiler.js';
+import { BOARDS, BOARD_IDS, DEFAULT_BOARD, getBoardPromptFragment, getBoardKnobCount } from './boards.js';
+import { createProject, addFile, deleteFile, renameFile, updateFileContent, getActiveFileContent, getFilePaths, getCppFiles, getAllFiles, getProjectSummary, getProjectContext, saveProject, loadProject, migrateFromLegacy } from './project-manager.js';
+import { AudioAnalyzer, analyzeAudioBuffer } from './audio-analyzer.js';
+import { profileCode, getProfileContext, getCycleReferenceTable } from './profiler.js';
+import { PatchEvolver } from './patch-evolver.js';
+import { exportProjectZip, importProjectZip, exportProjectURL, importProjectURL, downloadFile } from './project-io.js';
 
 // ─── State ─────────────────────────────────────────────────────────
 
@@ -14,7 +20,9 @@ const state = {
   provider: localStorage.getItem('daisy-gpt-provider') || 'anthropic',
   model: localStorage.getItem('daisy-gpt-model') || 'claude-opus-4-6',
   skill: localStorage.getItem('daisy-gpt-skill') || '',
-  code: '',
+  // Project state (replaces single-file state.code)
+  project: null, // Initialized in init()
+  code: '', // Convenience accessor — always mirrors active file content
   previousCode: '',
   isGenerating: false,
   isCompiling: false,
@@ -72,6 +80,10 @@ const state = {
   isRemoteCompiling: false,
   armBinaryBytes: null,
   armTargetAddress: null,
+  // Agent tools
+  audioAnalyzer: new AudioAnalyzer(),
+  evolver: new PatchEvolver(),
+  lastProfile: null,
 };
 
 // ─── DOM References ────────────────────────────────────────────────
@@ -81,29 +93,23 @@ const $$ = (sel) => document.querySelectorAll(sel);
 
 // ─── System Prompt ─────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are daisy-gpt, an expert DSP programming assistant for the Electro-Smith Daisy Patch platform using DaisySP.
+// Dynamic system prompt — built per-message based on board, project, and tool state
+function buildSystemPrompt() {
+  const board = state.project ? state.project.board : DEFAULT_BOARD;
+  const boardPrompt = getBoardPromptFragment(board);
 
-You help users create, modify, and understand synth patches through conversation. You can:
-- Generate complete C++ code for the Daisy Patch
-- Explain what the code does and how it works
-- Modify existing patches based on user requests
-- Suggest improvements or creative ideas
-- Answer questions about DaisySP, synthesis, and DSP
+  let prompt = `You are daisy-gpt, an expert AI pair programmer for the Electro-Smith Daisy embedded audio platform using DaisySP.
 
-When providing code, wrap it in a \`\`\`cpp code fence. Your code must:
-1. Include "daisy_patch.h" and "daisysp.h"
-2. Use \`using namespace daisy; using namespace daisysp;\`
-3. Declare a global \`DaisyPatch patch;\`
-4. Implement \`void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size)\`
-5. Implement \`int main(void)\` that calls \`patch.Init()\`, initializes DSP objects, and calls \`patch.StartAudio(AudioCallback)\`
-6. Map the 4 knobs (CTRL_1 through CTRL_4) to meaningful parameters using \`patch.GetKnobValue(DaisyPatch::CTRL_N)\`
-7. Use \`fmap()\` for knob scaling (with Mapping::LOG for frequency-like params)
-8. CRITICAL — KNOB LABELS: You MUST add a short descriptive \`// Label\` comment at the end of EVERY line that reads a CTRL_N knob. This comment becomes the knob label shown in the UI. Example:
-   \`float freq = fmap(patch.GetKnobValue(DaisyPatch::CTRL_1), 20.f, 2000.f, Mapping::LOG); // Frequency\`
-   \`float res  = fmap(patch.GetKnobValue(DaisyPatch::CTRL_2), 0.f, 0.95f);                 // Resonance\`
-   \`float mix  = patch.GetKnobValue(DaisyPatch::CTRL_3);                                    // Dry/Wet Mix\`
-   \`float vol  = patch.GetKnobValue(DaisyPatch::CTRL_4);                                    // Volume\`
-   Without these comments, the knobs display as generic "Knob 1", "Knob 2", etc. Always include them.
+You work alongside the user as a knowledgeable collaborator, helping them build, debug, and understand DSP projects. You can:
+- Generate complete C++ code for any Daisy board (Seed, Patch, Pod, Petal, Field)
+- Work with multi-file projects (multiple .cpp/.h files)
+- Explain code, debug errors, suggest improvements
+- Answer questions about DaisySP, synthesis, DSP theory, and embedded audio
+- Analyze audio output to give feedback on how the patch sounds
+- Profile patches to estimate CPU/memory usage on hardware
+
+BOARD CONTEXT:
+${boardPrompt}
 
 IMPORTANT CODE CONSTRAINTS:
 - Always include COMPLETE, COMPILABLE code in your \`\`\`cpp blocks — never partial snippets
@@ -113,18 +119,32 @@ IMPORTANT CODE CONSTRAINTS:
 - Always call Process() every sample for envelopes/oscillators
 - Use fclamp() to prevent out-of-range filter frequencies
 - Keep output levels reasonable — use SoftClip() if mixing multiple sources
-- Gate inputs: patch.gate_input[0].Trig() for trigger detection
 
-After providing code, briefly explain what each knob controls.
+MULTI-FILE PROJECTS:
+When providing code for a specific file, include the filename as a comment at the top:
+\`\`\`cpp
+// --- main.cpp
+#include "daisy_patch.h"
+...
+\`\`\`
+
+To create a new file, use a \`\`\`newfile block:
+\`\`\`newfile
+--- dsp/filter.h
+#pragma once
+...
+\`\`\`
+
+To delete a file, use a \`\`\`deletefile block:
+\`\`\`deletefile
+--- old_module.h
+\`\`\`
 
 EDIT COMMANDS:
-When the user asks for a small change to existing code, prefer edit commands over full regeneration.
-Use edit blocks for param tweaks, adding modules, fixing bugs, changing knob ranges.
-Use full \`\`\`cpp code blocks for new patches or extensive rewrites (>50% of code changes).
-
+When the user asks for a small change, prefer edit commands over full regeneration.
 Edit format — wrap each edit in a fenced \`\`\`edit block:
 \`\`\`edit
---- patch.cpp
+--- main.cpp
 <<<<<<< SEARCH
 exact lines to find in current code
 =======
@@ -133,16 +153,23 @@ replacement lines
 \`\`\`
 
 Rules:
+- Specify which file to edit after ---
 - SEARCH text must match the current code exactly (including indentation)
 - Include 1-2 context lines around the change for unique matching
-- Empty REPLACE section = delete the matched lines
 - Multiple edit blocks per response are fine, applied in order
-- If you're unsure the match is unique, include more context lines
+
+${getCycleReferenceTable()}
 
 Be concise but helpful. Focus on being a great collaborator.
 
 DaisySP REFERENCE:
 ${DAISYSP_REFERENCE}`;
+
+  return prompt;
+}
+
+// Legacy compatibility — keep the const name for any code that references it
+const SYSTEM_PROMPT = null; // Now dynamically generated via buildSystemPrompt()
 
 // ─── Chat / LLM ───────────────────────────────────────────────────
 
@@ -172,7 +199,7 @@ async function sendMessage(userText) {
   if (input) { input.value = ''; input.style.height = 'auto'; }
 
   // Build system prompt with dynamic context
-  let systemPrompt = SYSTEM_PROMPT;
+  let systemPrompt = buildSystemPrompt();
   if (state.midiConnected) {
     systemPrompt = `MIDI KEYBOARD CONNECTED.
 Available CV inputs in AudioCallback:
@@ -185,10 +212,24 @@ Use cvToFreq() for frequency from MIDI pitch.\n\n` + systemPrompt;
   if (state.skill && skills[state.skill]) {
     systemPrompt += `\n\nSKILL CONTEXT (use this as a guide for the requested patch type):\n${skills[state.skill]}`;
   }
-  if (state.code) {
-    systemPrompt += `\n\nCURRENT CODE (the user's active patch — reference or modify as needed):\n\`\`\`cpp\n${state.code}\n\`\`\``;
-    if (state.code.split('\n').length > 20) {
-      systemPrompt += '\nThe user has existing code. Prefer edit commands for small changes.';
+  // Inject project context (all files)
+  if (state.project && Object.keys(state.project.files).length > 0) {
+    systemPrompt += `\n\n${getProjectSummary(state.project)}`;
+    systemPrompt += `\nPROJECT FILES:\n${getProjectContext(state.project)}`;
+    const totalLines = Object.values(state.project.files).reduce((sum, f) => sum + f.content.split('\n').length, 0);
+    if (totalLines > 20) {
+      systemPrompt += 'The user has existing code. Prefer edit commands for small changes.';
+    }
+  }
+  // Inject audio analysis if audio is playing
+  if (state.isPlaying && state.audioAnalyzer.ready) {
+    systemPrompt += `\n\n${state.audioAnalyzer.toContextString()}`;
+  }
+  // Inject performance profile
+  if (state.lastProfile) {
+    systemPrompt += `\n\n${state.lastProfile.summary}`;
+    if (state.lastProfile.warnings.length > 0) {
+      systemPrompt += '\nWARNINGS: ' + state.lastProfile.warnings.join('; ');
     }
   }
 
@@ -233,67 +274,108 @@ Use cvToFreq() for frequency from MIDI pitch.\n\n` + systemPrompt;
     state.messages.push({ role: 'assistant', content: fullResponse });
     finalizeAssistantBubble(state.streamingMessageEl, fullResponse);
 
+    // Handle new response block types
+    const newFiles = extractNewFilesFromResponse(fullResponse);
+    const deleteFiles = extractDeleteFilesFromResponse(fullResponse);
+    const variants = PatchEvolver.parseVariantsBlock(fullResponse);
+
+    // Apply new file creations
+    for (const { path, content } of newFiles) {
+      try {
+        addFile(state.project, path, content);
+        showToast(`Created ${path}`);
+      } catch { /* file exists, update instead */
+        updateFileContent(state.project, path, content);
+        showToast(`Updated ${path}`);
+      }
+    }
+
+    // Apply file deletions
+    for (const path of deleteFiles) {
+      try {
+        deleteFile(state.project, path);
+        showToast(`Deleted ${path}`);
+      } catch { /* ignore */ }
+    }
+
+    // Handle variants (evolution mode)
+    if (variants && state.evolver.active) {
+      state.evolver.setVariants(variants);
+      state.isGenerating = false;
+      state.abortController = null;
+      updateUI();
+      renderEvolverPanel();
+      // Don't compile — user picks a variant first
+    }
+
     // Check for edits first, then full code blocks
-    const edits = extractEditsFromResponse(fullResponse);
-    const extractedCode = extractCodeFromResponse(fullResponse);
+    else {
+      const edits = extractEditsFromResponse(fullResponse);
+      const extractedCode = extractCodeFromResponse(fullResponse);
 
-    if (edits.length > 0 && state.code) {
-      // Apply edit commands
-      const { code, results } = applyEdits(edits, state.code);
-      const allOk = results.every(r => r.ok);
+      if (edits.length > 0 && state.code) {
+        // Apply edit commands — now multi-file aware
+        const { results } = applyProjectEdits(edits);
+        const allOk = results.every(r => r.ok);
+        const partial = results.some(r => r.ok);
 
-      if (allOk) {
+        if (allOk || partial) {
+          syncProjectToState();
+          extractKnobLabels(state.code);
+          updateKnobLabels();
+          syncCodeToEditor();
+          flashTab('code');
+          const failCount = results.filter(r => !r.ok).length;
+          if (allOk) {
+            showToast(`${results.length} edit(s) applied`);
+          } else {
+            appendChatBubble('assistant', `${failCount} of ${results.length} edit(s) failed. Partial edits applied.`);
+          }
+          addToHistory(userText, state.code);
+          saveProject(state.project);
+
+          state.isGenerating = false;
+          state.abortController = null;
+          updateUI();
+          await compileCode();
+        } else {
+          appendChatBubble('assistant', `${results.length} edit(s) failed to match. No changes applied.`);
+          state.isGenerating = false;
+          state.abortController = null;
+          updateUI();
+        }
+      } else if (extractedCode) {
+        // Determine target file from code comment: // --- filename.cpp
+        const targetFile = extractTargetFile(extractedCode) || state.project.activeFile;
         state.previousCode = state.code;
-        state.code = code;
+        updateFileContent(state.project, targetFile, extractedCode);
+        syncProjectToState();
         extractKnobLabels(state.code);
         updateKnobLabels();
         syncCodeToEditor();
         flashTab('code');
-        showToast(`${results.length} edit(s) applied`);
         addToHistory(userText, state.code);
+        saveProject(state.project);
 
         state.isGenerating = false;
         state.abortController = null;
         updateUI();
         await compileCode();
-      } else {
-        // Some edits failed — report in chat
-        const failCount = results.filter(r => !r.ok).length;
-        const errMsg = `${failCount} of ${results.length} edit(s) failed to match. `;
-        const partial = results.some(r => r.ok);
-        if (partial) {
-          state.previousCode = state.code;
-          state.code = code;
-          extractKnobLabels(state.code);
-          updateKnobLabels();
-          syncCodeToEditor();
-          flashTab('code');
-          appendChatBubble('assistant', errMsg + 'Partial edits applied.');
-        } else {
-          appendChatBubble('assistant', errMsg + 'No changes applied.');
-        }
+      } else if (newFiles.length > 0 || deleteFiles.length > 0) {
+        // Files were created/deleted but no code block — save and rebuild
+        syncProjectToState();
+        syncCodeToEditor();
+        renderProjectFileTree();
+        saveProject(state.project);
         state.isGenerating = false;
         state.abortController = null;
         updateUI();
-        if (partial) await compileCode();
+        if (newFiles.some(f => f.path.endsWith('.cpp'))) await compileCode();
+      } else {
+        state.isGenerating = false;
+        state.abortController = null;
+        updateUI();
       }
-    } else if (extractedCode) {
-      state.previousCode = state.code;
-      state.code = extractedCode;
-      extractKnobLabels(state.code);
-      updateKnobLabels();
-      syncCodeToEditor();
-      flashTab('code');
-      addToHistory(userText, state.code);
-
-      state.isGenerating = false;
-      state.abortController = null;
-      updateUI();
-      await compileCode();
-    } else {
-      state.isGenerating = false;
-      state.abortController = null;
-      updateUI();
     }
 
   } catch (err) {
@@ -641,6 +723,123 @@ function renderEditBlock(code) {
   return diffHtml;
 }
 
+// ─── New Response Block Parsers ────────────────────────────────────
+
+function extractNewFilesFromResponse(text) {
+  const files = [];
+  const regex = /```newfile\s*\n([\s\S]*?)```/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const block = match[1];
+    const fileMatch = block.match(/^---\s*(\S+)\s*$/m);
+    if (fileMatch) {
+      const path = fileMatch[1];
+      const content = block.substring(block.indexOf('\n', block.indexOf(fileMatch[0])) + 1).trim();
+      files.push({ path, content });
+    }
+  }
+  return files;
+}
+
+function extractDeleteFilesFromResponse(text) {
+  const files = [];
+  const regex = /```deletefile\s*\n([\s\S]*?)```/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const fileMatch = match[1].match(/^---\s*(\S+)\s*$/m);
+    if (fileMatch) files.push(fileMatch[1]);
+  }
+  return files;
+}
+
+function extractTargetFile(code) {
+  // Look for // --- filename.cpp at the top of the code
+  const match = code.match(/^\/\/\s*---\s*(\S+)\s*$/m);
+  return match ? match[1] : null;
+}
+
+/**
+ * Apply edits to multi-file project. Each edit specifies its target file.
+ */
+function applyProjectEdits(edits) {
+  const results = [];
+  for (const edit of edits) {
+    const filePath = edit.file || state.project.activeFile;
+    const file = state.project.files[filePath];
+    if (!file) {
+      results.push({ ok: false, edit, reason: `File "${filePath}" not found` });
+      continue;
+    }
+
+    const { code, results: editResults } = applyEdits([edit], file.content);
+    if (editResults[0]?.ok) {
+      state.previousCode = file.content;
+      updateFileContent(state.project, filePath, code);
+      results.push({ ok: true, edit });
+    } else {
+      results.push({ ok: false, edit, reason: 'SEARCH text not found' });
+    }
+  }
+  return { results };
+}
+
+/**
+ * Sync project state to the convenience state.code accessor.
+ */
+function syncProjectToState() {
+  if (state.project) {
+    state.code = getActiveFileContent(state.project);
+  }
+}
+
+/**
+ * Render the evolver panel (placeholder — will be expanded in UI phase).
+ */
+function renderEvolverPanel() {
+  // TODO: Render evolution variant slots in UI
+  if (state.evolver.active && state.evolver.variants.length > 0) {
+    const labels = state.evolver.variants.map(v => v.label).join('\n');
+    showToast(`Evolution Gen ${state.evolver.generation}: ${state.evolver.variants.length} variants ready`);
+  }
+}
+
+/**
+ * Render the project file tree in the Files tab.
+ */
+function renderProjectFileTree() {
+  const browser = $('#file-browser');
+  if (!browser || !state.project) return;
+
+  const filePaths = getFilePaths(state.project);
+  if (filePaths.length === 0) return;
+
+  // Build tree structure from project files
+  const tree = {};
+  for (const path of filePaths) {
+    const parts = path.split('/');
+    let node = tree;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!node[parts[i]]) node[parts[i]] = {};
+      node = node[parts[i]];
+    }
+    node[parts[parts.length - 1]] = { _file: true, _path: path, _type: 'user' };
+  }
+
+  // Also include system headers if compiler is loaded
+  for (const [path, { type }] of state.fileRegistry) {
+    const parts = path.split('/');
+    let node = tree;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!node[parts[i]]) node[parts[i]] = {};
+      node = node[parts[i]];
+    }
+    node[parts[parts.length - 1]] = { _file: true, _path: path, _type: type };
+  }
+
+  browser.innerHTML = '';
+  renderTreeNode(browser, tree, '');
+}
+
 function extractKnobLabels(code) {
   const labels = ['Knob 1', 'Knob 2', 'Knob 3', 'Knob 4'];
 
@@ -661,7 +860,7 @@ function extractKnobLabels(code) {
 // ─── Compiler ──────────────────────────────────────────────────────
 
 async function compileCode() {
-  if (!state.code) return;
+  if (!state.code && (!state.project || Object.keys(state.project.files).length === 0)) return;
 
   // Auto-load compiler if not loaded yet
   if (!state.compiler.loaded && !state.compilerLoading) {
@@ -678,14 +877,17 @@ async function compileCode() {
 
   const attemptingClang = state.compiler.loaded;
 
+  // Get the code to compile — use active file for WASM preview
+  const codeToCompile = state.code || getActiveFileContent(state.project);
+
   try {
     // Try C++ compilation if compiler is loaded
     if (attemptingClang) {
-      state.wasmBytes = await compileWithWasmClang(state.code);
+      state.wasmBytes = await compileWithWasmClang(codeToCompile);
       state.compiledWithClang = true;
     } else {
       // Fallback: preview synth WASM
-      state.wasmBytes = generatePreviewWasm(state.code);
+      state.wasmBytes = generatePreviewWasm(codeToCompile);
     }
 
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
@@ -693,6 +895,14 @@ async function compileCode() {
     state.compiled = true;
     state.isCompiling = false;
     setStatus('success', `${mode} (${elapsed}s)`);
+
+    // Run profiler on successful compile
+    try {
+      const allCode = state.project ? getAllFiles(state.project) : codeToCompile;
+      state.lastProfile = profileCode(allCode);
+      updateProfilerDisplay();
+    } catch { /* profiler is best-effort */ }
+
     updateUI();
 
   } catch (err) {
@@ -709,7 +919,7 @@ async function compileCode() {
     } else {
       // Max retries exhausted — fall back to preview synth
       try {
-        state.wasmBytes = generatePreviewWasm(state.code);
+        state.wasmBytes = generatePreviewWasm(codeToCompile);
         state.compiled = true;
         state.compiledWithClang = false;
         setStatus('warning', `C++ compile failed, using preview synth`);
@@ -718,6 +928,21 @@ async function compileCode() {
       }
       updateUI();
     }
+  }
+}
+
+/**
+ * Update the profiler display in the status bar.
+ */
+function updateProfilerDisplay() {
+  const profilerEl = $('#profiler-status');
+  if (!profilerEl || !state.lastProfile) return;
+  profilerEl.textContent = state.lastProfile.summary;
+  profilerEl.title = state.lastProfile.warnings.join('\n') || 'No warnings';
+  if (state.lastProfile.cpu.percent > 80) {
+    profilerEl.classList.add('warning');
+  } else {
+    profilerEl.classList.remove('warning');
   }
 }
 
@@ -749,7 +974,7 @@ async function loadCompiler() {
 // ─── Remote ARM Compilation ───────────────────────────────────────
 
 async function compileForDaisy() {
-  if (!state.code) {
+  if (!state.code && (!state.project || Object.keys(state.project.files).length === 0)) {
     setStatus('error', 'No code to compile');
     return;
   }
@@ -766,10 +991,21 @@ async function compileForDaisy() {
 
   try {
     const url = state.remoteCompileUrl.replace(/\/+$/, '') + '/compile';
+
+    // Build request body — support both single-file (legacy) and multi-file
+    const body = {};
+    if (state.project && Object.keys(state.project.files).length > 1) {
+      body.files = getAllFiles(state.project);
+      body.board = state.project.board;
+    } else {
+      body.code = state.code || getActiveFileContent(state.project);
+    }
+    body.target = 'qspi';
+
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: state.code, target: 'qspi' }),
+      body: JSON.stringify(body),
     });
 
     if (response.ok) {
@@ -1431,6 +1667,9 @@ async function startAudio() {
     state.workletNode.connect(state.analyserNode);
     state.analyserNode.connect(state.audioContext.destination);
 
+    // Connect audio analyzer agent tool
+    state.audioAnalyzer.connect(state.analyserNode, state.audioContext.sampleRate);
+
     state.workletNode.port.postMessage({
       type: 'load-wasm',
       wasmBytes: state.wasmBytes,
@@ -2080,13 +2319,35 @@ function closeDfuOverlay() {
 function downloadCpp() {
   if (!state.code) return;
 
-  const blob = new Blob([state.code], { type: 'text/x-c++src' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'patch.cpp';
-  a.click();
-  URL.revokeObjectURL(url);
+  if (state.project && Object.keys(state.project.files).length > 1) {
+    // Multi-file project — export as zip
+    exportProjectZip(state.project);
+  } else {
+    const filename = state.project ? state.project.activeFile : 'patch.cpp';
+    downloadFile(filename, state.code);
+  }
+}
+
+/**
+ * Update knob UI for the current board's knob count.
+ */
+function updateKnobsForBoard() {
+  if (!state.project) return;
+  const knobCount = getBoardKnobCount(state.project.board);
+
+  // Show/hide knob rows based on board
+  for (let i = 0; i < 8; i++) {
+    const row = $(`#knob-${i}`)?.closest('.knob-row');
+    if (row) {
+      row.classList.toggle('hidden', i >= knobCount);
+    }
+  }
+
+  // Ensure knobs array is the right size
+  while (state.knobs.length < knobCount) {
+    state.knobs.push(0.5);
+    state.knobLabels.push(`Knob ${state.knobs.length}`);
+  }
 }
 
 // ─── MIDI ─────────────────────────────────────────────────────────
@@ -2194,9 +2455,10 @@ function syncCodeToEditor() {
     editor.value = state.code;
     editor.readOnly = false;
     const statusEl = $('#code-editor-status');
-    if (statusEl) statusEl.textContent = 'patch.cpp';
+    if (statusEl) statusEl.textContent = state.project ? state.project.activeFile : 'patch.cpp';
   }
   updateCodeHighlight();
+  renderProjectFileTree();
 }
 
 function updateCodeHighlight() {
@@ -2212,6 +2474,10 @@ function syncEditorToCode() {
   const editor = $('#code-editor');
   if (editor && !editor.readOnly) {
     state.code = editor.value;
+    // Sync back to project
+    if (state.project && state.project.activeFile) {
+      updateFileContent(state.project, state.project.activeFile, state.code);
+    }
   }
 }
 
@@ -2377,16 +2643,24 @@ function openFileViewer(path) {
 window._applyEditFromChat = function(btn) {
   const search = decodeURIComponent(atob(btn.dataset.search));
   const replace = decodeURIComponent(atob(btn.dataset.replace));
+  const file = btn.dataset.file || (state.project ? state.project.activeFile : 'main.cpp');
 
   if (!state.code) {
     showToast('No code to edit');
     return;
   }
 
-  const { code, results } = applyEdits([{ file: 'patch.cpp', search, replace }], state.code);
+  const targetCode = state.project?.files[file]?.content || state.code;
+  const { code, results } = applyEdits([{ file, search, replace }], targetCode);
   if (results[0]?.ok) {
     state.previousCode = state.code;
-    state.code = code;
+    if (state.project) {
+      updateFileContent(state.project, file, code);
+      syncProjectToState();
+      saveProject(state.project);
+    } else {
+      state.code = code;
+    }
     extractKnobLabels(state.code);
     updateKnobLabels();
     syncCodeToEditor();
@@ -2466,6 +2740,53 @@ function initCodePanel() {
 // ─── Event Binding ─────────────────────────────────────────────────
 
 async function init() {
+  // Initialize project — load saved or create new
+  const savedProject = loadProject();
+  if (savedProject) {
+    state.project = savedProject;
+  } else {
+    // Check for legacy single-file code
+    const legacyCode = localStorage.getItem('daisy-gpt-code') || '';
+    if (legacyCode) {
+      state.project = migrateFromLegacy(legacyCode);
+    } else {
+      state.project = createProject('untitled', DEFAULT_BOARD);
+    }
+  }
+
+  // Check for shared project URL
+  if (window.location.hash) {
+    const urlProject = importProjectURL(window.location.hash);
+    if (urlProject) {
+      state.project = urlProject;
+      showToast('Loaded shared project');
+      window.location.hash = '';
+    }
+  }
+
+  syncProjectToState();
+
+  // Populate board selector
+  const boardSelect = $('#board-select');
+  if (boardSelect) {
+    boardSelect.innerHTML = '';
+    for (const id of BOARD_IDS) {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = BOARDS[id].name;
+      if (id === state.project.board) opt.selected = true;
+      boardSelect.appendChild(opt);
+    }
+    boardSelect.addEventListener('change', (e) => {
+      state.project.board = e.target.value;
+      saveProject(state.project);
+      updateKnobsForBoard();
+    });
+  }
+
+  // Initialize knobs for current board
+  updateKnobsForBoard();
+
   // Send button
   $('#btn-send')?.addEventListener('click', () => {
     const text = $('#chat-input')?.value?.trim();
@@ -2497,12 +2818,13 @@ async function init() {
   $('#btn-new-chat')?.addEventListener('click', () => {
     state.messages = [];
     const container = $('#chat-messages');
+    const boardName = BOARDS[state.project?.board]?.name || 'Daisy';
     if (container) {
       container.innerHTML = `
         <div class="chat-welcome">
           <div class="chat-welcome-logo">daisy-gpt</div>
-          <p>I'm your Daisy Patch programming assistant. Describe a synth patch and I'll write the code, compile it, and let you play it right here.</p>
-          <p class="chat-welcome-hint">Try: "acid bassline with resonant filter and portamento"</p>
+          <p>I'm your ${boardName} AI pair programmer. Describe what you want to build and I'll help you code it, compile it, and play it right here.</p>
+          <p class="chat-welcome-hint">Try: "acid bassline with resonant filter" or "help me debug this compile error"</p>
         </div>`;
     }
   });
@@ -2510,12 +2832,45 @@ async function init() {
   // Undo
   $('#btn-undo')?.addEventListener('click', () => {
     if (state.previousCode) {
-      state.code = state.previousCode;
+      if (state.project) {
+        updateFileContent(state.project, state.project.activeFile, state.previousCode);
+        syncProjectToState();
+      } else {
+        state.code = state.previousCode;
+      }
       state.previousCode = '';
       syncCodeToEditor();
       updateUI();
       compileCode();
     }
+  });
+
+  // Export project as zip
+  $('#btn-export-zip')?.addEventListener('click', () => {
+    if (state.project) exportProjectZip(state.project);
+  });
+
+  // Import project from zip
+  $('#btn-import-zip')?.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.zip';
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        state.project = await importProjectZip(file);
+        syncProjectToState();
+        syncCodeToEditor();
+        renderProjectFileTree();
+        saveProject(state.project);
+        showToast(`Imported "${state.project.name}"`);
+        updateUI();
+      } catch (err) {
+        showToast(`Import failed: ${err.message}`);
+      }
+    };
+    input.click();
   });
 
   // Play/Stop
