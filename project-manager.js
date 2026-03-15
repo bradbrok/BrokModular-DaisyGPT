@@ -155,8 +155,14 @@ export function getProjectContext(project) {
 
 // ─── Persistence ────────────────────────────────────────────────
 
+const PROJECT_PREFIX = 'daisy-gpt-proj-';
+
+function projectKey(name) {
+  return PROJECT_PREFIX + name;
+}
+
 /**
- * Save the current project to localStorage.
+ * Save the current project to localStorage (also persists to the multi-project store).
  */
 export function saveProject(project) {
   try {
@@ -164,27 +170,36 @@ export function saveProject(project) {
     for (const file of Object.values(project.files)) {
       file.dirty = false;
     }
+    project.updatedAt = Date.now();
+
+    // Save as the "current" project
     localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
 
-    // Also update the projects list
-    const list = loadProjectsList();
-    const existing = list.findIndex(p => p.name === project.name);
-    const entry = {
-      name: project.name,
-      board: project.board,
-      fileCount: Object.keys(project.files).length,
-      updatedAt: project.updatedAt,
-    };
-    if (existing >= 0) {
-      list[existing] = entry;
-    } else {
-      list.unshift(entry);
-    }
-    if (list.length > 20) list.length = 20;
-    localStorage.setItem(PROJECTS_LIST_KEY, JSON.stringify(list));
+    // Also save to the multi-project store
+    localStorage.setItem(projectKey(project.name), JSON.stringify(project));
+
+    // Update the projects list index
+    updateProjectsIndex(project);
   } catch (e) {
     console.error('Failed to save project:', e);
   }
+}
+
+/**
+ * Save project under a new name. Returns the renamed project.
+ */
+export function saveProjectAs(project, newName) {
+  if (!newName || !newName.trim()) throw new Error('Project name cannot be empty');
+  newName = newName.trim();
+
+  // Remove old entry if renaming
+  if (project.name !== newName) {
+    deleteProjectByName(project.name);
+  }
+
+  project.name = newName;
+  saveProject(project);
+  return project;
 }
 
 /**
@@ -202,6 +217,72 @@ export function loadProject() {
 }
 
 /**
+ * Load a specific project by name from the multi-project store.
+ */
+export function loadProjectByName(name) {
+  try {
+    const json = localStorage.getItem(projectKey(name));
+    if (!json) return null;
+    return JSON.parse(json);
+  } catch (e) {
+    console.error('Failed to load project:', e);
+    return null;
+  }
+}
+
+/**
+ * Delete a project by name from the multi-project store.
+ */
+export function deleteProjectByName(name) {
+  try {
+    localStorage.removeItem(projectKey(name));
+
+    // Remove from index
+    const list = loadProjectsList();
+    const filtered = list.filter(p => p.name !== name);
+    localStorage.setItem(PROJECTS_LIST_KEY, JSON.stringify(filtered));
+  } catch (e) {
+    console.error('Failed to delete project:', e);
+  }
+}
+
+/**
+ * Duplicate a project under a new name. Returns the new project.
+ */
+export function duplicateProject(project, newName) {
+  const copy = JSON.parse(JSON.stringify(project));
+  copy.name = newName;
+  copy.createdAt = Date.now();
+  copy.updatedAt = Date.now();
+  saveProject(copy);
+  return copy;
+}
+
+/**
+ * Rename a project. Returns the updated project.
+ */
+export function renameProject(project, newName) {
+  if (!newName || !newName.trim()) throw new Error('Project name cannot be empty');
+  newName = newName.trim();
+  if (newName === project.name) return project;
+
+  // Check if target name already exists
+  const existing = loadProjectByName(newName);
+  if (existing) throw new Error(`Project "${newName}" already exists`);
+
+  const oldName = project.name;
+  project.name = newName;
+  project.updatedAt = Date.now();
+
+  // Remove old storage key
+  localStorage.removeItem(projectKey(oldName));
+
+  // Save under new name
+  saveProject(project);
+  return project;
+}
+
+/**
  * Load the list of saved projects (metadata only).
  */
 export function loadProjectsList() {
@@ -210,6 +291,27 @@ export function loadProjectsList() {
   } catch {
     return [];
   }
+}
+
+/**
+ * Update the projects index with the given project's metadata.
+ */
+function updateProjectsIndex(project) {
+  const list = loadProjectsList();
+  const existing = list.findIndex(p => p.name === project.name);
+  const entry = {
+    name: project.name,
+    board: project.board,
+    fileCount: Object.keys(project.files).length,
+    updatedAt: project.updatedAt,
+  };
+  if (existing >= 0) {
+    list[existing] = entry;
+  } else {
+    list.unshift(entry);
+  }
+  if (list.length > 50) list.length = 50;
+  localStorage.setItem(PROJECTS_LIST_KEY, JSON.stringify(list));
 }
 
 /**

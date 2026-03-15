@@ -154,6 +154,146 @@ export function downloadFile(filename, content) {
   URL.revokeObjectURL(url);
 }
 
+// ─── GitHub Gist Sharing ─────────────────────────────────────────
+
+/**
+ * Create a GitHub Gist from a project.
+ * @param {Object} project - The project to share
+ * @param {string} token - GitHub personal access token
+ * @param {boolean} isPublic - Whether the gist should be public
+ * @returns {Promise<{url: string, id: string}>}
+ */
+export async function createGist(project, token, isPublic = false) {
+  const files = {};
+
+  // Add all source files
+  for (const [path, file] of Object.entries(project.files)) {
+    // Gist filenames can't have slashes — replace with double underscores
+    const gistName = path.replace(/\//g, '__');
+    files[gistName] = { content: file.content };
+  }
+
+  // Add manifest
+  files['daisy-project.json'] = {
+    content: JSON.stringify({
+      name: project.name,
+      board: project.board,
+      activeFile: project.activeFile,
+      fileMap: Object.keys(project.files).reduce((map, path) => {
+        map[path.replace(/\//g, '__')] = path;
+        return map;
+      }, {}),
+    }, null, 2),
+  };
+
+  const res = await fetch('https://api.github.com/gists', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/vnd.github+json',
+    },
+    body: JSON.stringify({
+      description: `daisy-gpt: ${project.name} (${project.board})`,
+      public: isPublic,
+      files,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `GitHub API error: ${res.status}`);
+  }
+
+  const gist = await res.json();
+  return { url: gist.html_url, id: gist.id };
+}
+
+/**
+ * Load a project from a GitHub Gist.
+ * @param {string} gistId - The Gist ID or URL
+ * @param {string} [token] - Optional GitHub token (for private gists)
+ * @returns {Promise<Object>} project
+ */
+export async function loadFromGist(gistId, token) {
+  // Extract ID from URL if full URL provided
+  const idMatch = gistId.match(/([a-f0-9]{20,})/);
+  if (idMatch) gistId = idMatch[1];
+
+  const headers = {
+    'Accept': 'application/vnd.github+json',
+  };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch(`https://api.github.com/gists/${gistId}`, { headers });
+  if (!res.ok) {
+    throw new Error(res.status === 404 ? 'Gist not found' : `GitHub API error: ${res.status}`);
+  }
+
+  const gist = await res.json();
+
+  // Read manifest
+  let manifest = null;
+  let fileMap = {};
+  if (gist.files['daisy-project.json']) {
+    try {
+      manifest = JSON.parse(gist.files['daisy-project.json'].content);
+      fileMap = manifest.fileMap || {};
+    } catch { /* ignore */ }
+  }
+
+  const project = {
+    name: manifest?.name || 'imported-gist',
+    board: manifest?.board || 'patch',
+    activeFile: manifest?.activeFile || 'main.cpp',
+    openTabs: [],
+    files: {},
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    gistId: gistId,
+    gistUrl: gist.html_url,
+  };
+
+  // Reconstruct files
+  for (const [gistName, gistFile] of Object.entries(gist.files)) {
+    if (gistName === 'daisy-project.json') continue;
+    // Restore original path from fileMap, or reverse the __ encoding
+    const originalPath = fileMap[gistName] || gistName.replace(/__/g, '/');
+    if (originalPath.match(/\.(cpp|cc|c|h|hpp|hxx)$/i)) {
+      project.files[originalPath] = { content: gistFile.content, dirty: false };
+    }
+  }
+
+  if (Object.keys(project.files).length === 0) {
+    throw new Error('No source files found in Gist');
+  }
+
+  if (!project.files[project.activeFile]) {
+    project.activeFile = Object.keys(project.files)[0];
+  }
+  project.openTabs = [project.activeFile];
+
+  return project;
+}
+
+/**
+ * Get stored GitHub token.
+ */
+export function getGitHubToken() {
+  return localStorage.getItem('daisy-gpt-github-token') || '';
+}
+
+/**
+ * Save GitHub token.
+ */
+export function setGitHubToken(token) {
+  if (token) {
+    localStorage.setItem('daisy-gpt-github-token', token);
+  } else {
+    localStorage.removeItem('daisy-gpt-github-token');
+  }
+}
+
 // ─── ZIP Utilities (no dependencies) ─────────────────────────────
 
 /**

@@ -8,11 +8,11 @@ import { PROVIDERS, getApiKey, setApiKey, migrateOldKey, initKeyStore, getOllama
 import { MIDIController } from './midi.js';
 import { WasmClangCompiler } from './compiler.js';
 import { BOARDS, BOARD_IDS, DEFAULT_BOARD, getBoardPromptFragment, getBoardKnobCount } from './boards.js';
-import { createProject, addFile, deleteFile, renameFile, updateFileContent, getActiveFileContent, getFilePaths, getCppFiles, getAllFiles, getProjectSummary, getProjectContext, saveProject, loadProject, migrateFromLegacy } from './project-manager.js';
+import { createProject, addFile, deleteFile, renameFile, updateFileContent, getActiveFileContent, getFilePaths, getCppFiles, getAllFiles, getProjectSummary, getProjectContext, saveProject, saveProjectAs, loadProject, loadProjectByName, deleteProjectByName, duplicateProject, renameProject, loadProjectsList, migrateFromLegacy } from './project-manager.js';
 import { AudioAnalyzer, analyzeAudioBuffer } from './audio-analyzer.js';
 import { profileCode, getProfileContext, getCycleReferenceTable } from './profiler.js';
 import { PatchEvolver } from './patch-evolver.js';
-import { exportProjectZip, importProjectZip, exportProjectURL, importProjectURL, downloadFile } from './project-io.js';
+import { exportProjectZip, importProjectZip, exportProjectURL, importProjectURL, downloadFile, createGist, loadFromGist, getGitHubToken, setGitHubToken } from './project-io.js';
 
 // ─── State ─────────────────────────────────────────────────────────
 
@@ -2247,6 +2247,230 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// ─── Projects Panel ────────────────────────────────────────────────
+
+function showProjects() {
+  const overlay = $('#projects-overlay');
+  if (overlay) {
+    overlay.classList.remove('hidden');
+    renderProjectsList();
+    // Sync current project name
+    const nameInput = $('#project-name-input');
+    if (nameInput && state.project) nameInput.value = state.project.name;
+    const badge = $('#project-board-badge');
+    if (badge && state.project) {
+      const board = BOARDS[state.project.board];
+      badge.textContent = board ? board.name : state.project.board;
+    }
+  }
+}
+
+function closeProjects() {
+  const overlay = $('#projects-overlay');
+  if (overlay) overlay.classList.add('hidden');
+}
+
+function renderProjectsList() {
+  const list = $('#projects-list');
+  if (!list) return;
+
+  const projects = loadProjectsList();
+  if (projects.length === 0) {
+    list.innerHTML = '<div class="projects-empty">No saved projects yet.</div>';
+    return;
+  }
+
+  list.innerHTML = projects.map(entry => {
+    const date = new Date(entry.updatedAt).toLocaleDateString([], { month: 'short', day: 'numeric' });
+    const isCurrent = state.project && entry.name === state.project.name;
+    return `<div class="projects-item${isCurrent ? ' active' : ''}" data-name="${escapeHtml(entry.name)}">
+      <div class="projects-item-info">
+        <span class="projects-item-name">${escapeHtml(entry.name)}</span>
+        <span class="projects-item-meta">${entry.board} · ${entry.fileCount} file${entry.fileCount !== 1 ? 's' : ''} · ${date}</span>
+      </div>
+      <div class="projects-item-actions">
+        ${isCurrent ? '<span class="projects-item-current">current</span>' : `<button class="btn btn-tiny projects-btn-open" data-name="${escapeHtml(entry.name)}">Open</button>`}
+        <button class="btn btn-tiny btn-danger projects-btn-delete" data-name="${escapeHtml(entry.name)}" title="Delete project">&#x2715;</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Open buttons
+  list.querySelectorAll('.projects-btn-open').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      switchToProject(btn.dataset.name);
+    });
+  });
+
+  // Delete buttons
+  list.querySelectorAll('.projects-btn-delete').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const name = btn.dataset.name;
+      if (confirm(`Delete project "${name}"?`)) {
+        deleteProjectByName(name);
+        if (state.project && state.project.name === name) {
+          state.project = createProject('untitled', DEFAULT_BOARD);
+          syncProjectToState();
+          syncCodeToEditor();
+          updateUI();
+        }
+        renderProjectsList();
+      }
+    });
+  });
+}
+
+function switchToProject(name) {
+  // Save current project first
+  if (state.project) saveProject(state.project);
+
+  const loaded = loadProjectByName(name);
+  if (loaded) {
+    state.project = loaded;
+    // Also set as current
+    localStorage.setItem('daisy-gpt-project', JSON.stringify(loaded));
+    syncProjectToState();
+    syncCodeToEditor();
+    renderProjectFileTree();
+    updateUI();
+    updateKnobsForBoard();
+
+    // Update board selector
+    const boardSelect = $('#board-select');
+    if (boardSelect) boardSelect.value = state.project.board;
+
+    showToast(`Opened "${name}"`);
+    renderProjectsList();
+  }
+}
+
+function handleProjectRename() {
+  const nameInput = $('#project-name-input');
+  if (!nameInput || !state.project) return;
+
+  const newName = nameInput.value.trim();
+  if (!newName || newName === state.project.name) {
+    nameInput.value = state.project.name;
+    return;
+  }
+
+  try {
+    renameProject(state.project, newName);
+    showToast(`Renamed to "${newName}"`);
+    renderProjectsList();
+  } catch (err) {
+    showToast(err.message);
+    nameInput.value = state.project.name;
+  }
+}
+
+async function handleShareGist() {
+  const tokenInput = $('#gist-token');
+  const isPublic = $('#gist-public')?.checked || false;
+  const token = tokenInput?.value?.trim();
+
+  if (!token) {
+    showToast('GitHub token required');
+    return;
+  }
+
+  setGitHubToken(token);
+
+  const btn = $('#btn-confirm-gist');
+  if (btn) btn.textContent = 'Sharing...';
+
+  try {
+    const { url } = await createGist(state.project, token, isPublic);
+    state.project.gistUrl = url;
+    saveProject(state.project);
+
+    const resultEl = $('#gist-result');
+    const linkEl = $('#gist-result-link');
+    if (resultEl && linkEl) {
+      linkEl.href = url;
+      linkEl.textContent = url;
+      resultEl.classList.remove('hidden');
+    }
+    showToast('Shared on GitHub Gist!');
+  } catch (err) {
+    showToast(`Gist error: ${err.message}`);
+  } finally {
+    if (btn) btn.textContent = 'Share';
+  }
+}
+
+async function handleImportGist() {
+  const tokenInput = $('#gist-token');
+  const urlInput = $('#gist-import-url');
+  const token = tokenInput?.value?.trim();
+  const gistUrl = urlInput?.value?.trim();
+
+  if (!gistUrl) {
+    showToast('Enter a Gist URL or ID');
+    return;
+  }
+
+  if (token) setGitHubToken(token);
+
+  const btn = $('#btn-confirm-gist');
+  if (btn) btn.textContent = 'Importing...';
+
+  try {
+    const project = await loadFromGist(gistUrl, token);
+    if (state.project) saveProject(state.project);
+
+    state.project = project;
+    syncProjectToState();
+    syncCodeToEditor();
+    renderProjectFileTree();
+    saveProject(state.project);
+    showToast(`Imported "${project.name}" from Gist`);
+    updateUI();
+    closeGistModal();
+    closeProjects();
+  } catch (err) {
+    showToast(`Import error: ${err.message}`);
+  } finally {
+    if (btn) btn.textContent = state._gistMode === 'import' ? 'Import' : 'Share';
+  }
+}
+
+function showGistModal(mode = 'share') {
+  state._gistMode = mode;
+  const modal = $('#gist-modal');
+  const title = $('#gist-modal-title');
+  const importRow = $('#gist-import-row');
+  const publicRow = $('#gist-public-row');
+  const confirmBtn = $('#btn-confirm-gist');
+  const resultEl = $('#gist-result');
+
+  if (modal) modal.classList.remove('hidden');
+  if (resultEl) resultEl.classList.add('hidden');
+
+  // Pre-fill token
+  const tokenInput = $('#gist-token');
+  if (tokenInput) tokenInput.value = getGitHubToken();
+
+  if (mode === 'import') {
+    if (title) title.textContent = 'Import from GitHub Gist';
+    if (importRow) importRow.classList.remove('hidden');
+    if (publicRow) publicRow.classList.add('hidden');
+    if (confirmBtn) confirmBtn.textContent = 'Import';
+  } else {
+    if (title) title.textContent = 'Share on GitHub Gist';
+    if (importRow) importRow.classList.add('hidden');
+    if (publicRow) publicRow.classList.remove('hidden');
+    if (confirmBtn) confirmBtn.textContent = 'Share';
+  }
+}
+
+function closeGistModal() {
+  const modal = $('#gist-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
 // ─── DFU Flash ─────────────────────────────────────────────────────
 
 async function flashToDaisy() {
@@ -2913,6 +3137,54 @@ async function init() {
   $('#btn-history')?.addEventListener('click', showHistory);
   $('#btn-close-history')?.addEventListener('click', closeHistory);
 
+  // Projects
+  $('#btn-projects')?.addEventListener('click', showProjects);
+  $('#btn-close-projects')?.addEventListener('click', closeProjects);
+  $('#btn-new-project')?.addEventListener('click', () => {
+    if (state.project) saveProject(state.project);
+    state.project = createProject('untitled', state.project?.board || DEFAULT_BOARD);
+    syncProjectToState();
+    syncCodeToEditor();
+    renderProjectFileTree();
+    saveProject(state.project);
+    showToast('Created new project');
+    renderProjectsList();
+    updateUI();
+    const nameInput = $('#project-name-input');
+    if (nameInput) { nameInput.value = state.project.name; nameInput.select(); }
+    const badge = $('#project-board-badge');
+    if (badge) badge.textContent = BOARDS[state.project.board]?.name || state.project.board;
+  });
+  $('#project-name-input')?.addEventListener('change', handleProjectRename);
+  $('#project-name-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.target.blur(); handleProjectRename(); }
+  });
+  $('#btn-duplicate-project')?.addEventListener('click', () => {
+    if (!state.project) return;
+    const newName = state.project.name + '-copy';
+    const copy = duplicateProject(state.project, newName);
+    showToast(`Duplicated as "${newName}"`);
+    renderProjectsList();
+  });
+  $('#btn-share-url')?.addEventListener('click', () => {
+    if (!state.project) return;
+    try {
+      const url = exportProjectURL(state.project);
+      navigator.clipboard.writeText(url).then(() => showToast('Shareable URL copied!'));
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+  $('#btn-share-gist')?.addEventListener('click', () => showGistModal('share'));
+  $('#btn-import-gist')?.addEventListener('click', () => showGistModal('import'));
+
+  // Gist modal
+  $('#btn-confirm-gist')?.addEventListener('click', () => {
+    if (state._gistMode === 'import') handleImportGist();
+    else handleShareGist();
+  });
+  $('#btn-cancel-gist')?.addEventListener('click', closeGistModal);
+
   // DFU
   $('#btn-close-dfu')?.addEventListener('click', closeDfuOverlay);
 
@@ -2922,6 +3194,12 @@ async function init() {
   });
   $('#history-overlay')?.addEventListener('click', (e) => {
     if (e.target.id === 'history-overlay') closeHistory();
+  });
+  $('#projects-overlay')?.addEventListener('click', (e) => {
+    if (e.target.id === 'projects-overlay') closeProjects();
+  });
+  $('#gist-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'gist-modal') closeGistModal();
   });
 
   // Provider selector
