@@ -308,8 +308,11 @@ export class DaisyDFU {
       await this.waitForState(DFU_STATE.dfuIDLE);
     }
 
-    // Select the correct alternate interface for the target memory region
-    await this.selectAlternateForAddress(baseAddress);
+    // Only select alternate interface if device has multiple alternates
+    // (STM32 ROM bootloader typically has one — calling selectAlternateInterface breaks it)
+    if (this.alternates.length > 1) {
+      await this.selectAlternateForAddress(baseAddress);
+    }
 
     // Erase sectors that will be written
     // Internal flash: 128KB sectors (0x20000), QSPI flash: 64KB sectors (0x10000)

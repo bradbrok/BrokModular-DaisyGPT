@@ -1028,7 +1028,7 @@ async function compileForDaisy() {
       body.code = state.code || getActiveFileContent(state.project);
     }
     body.board = state.project?.board || DEFAULT_BOARD;
-    body.target = 'qspi';
+    body.target = 'flash';
 
     const response = await fetch(url, {
       method: 'POST',
