@@ -27,6 +27,7 @@
       <select id="board-select" title="Daisy Board"></select>
       <select id="provider-select">
         <option value="anthropic">Anthropic</option>
+        <option value="gemini">Google Gemini</option>
         <option value="openai">OpenAI</option>
         <option value="openrouter">OpenRouter</option>
         <option value="ollama">Ollama (Local)</option>
@@ -307,6 +308,15 @@
         <input type="password" id="key-anthropic" placeholder="sk-ant-...">
         <button class="btn btn-test" data-provider="anthropic">Test</button>
         <span class="key-status" id="key-status-anthropic"></span>
+      </div>
+    </div>
+
+    <div class="key-row">
+      <label>Google Gemini</label>
+      <div class="key-input-row">
+        <input type="password" id="key-gemini" placeholder="AIza...">
+        <button class="btn btn-test" data-provider="gemini">Test</button>
+        <span class="key-status" id="key-status-gemini"></span>
       </div>
     </div>
 

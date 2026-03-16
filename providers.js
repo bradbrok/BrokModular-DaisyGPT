@@ -1,5 +1,5 @@
 // daisy-gpt — multi-provider LLM support
-// Anthropic, OpenAI (Responses API), OpenRouter (Chat Completions), Ollama (Local)
+// Anthropic, Google Gemini, OpenAI (Responses API), OpenRouter (Chat Completions), Ollama (Local)
 
 import { initCryptoStore, encryptValue, decryptValue, isEncryptedEnvelope } from './crypto-store.js';
 
@@ -107,6 +107,111 @@ export const PROVIDERS = {
     },
   },
 
+  gemini: {
+    name: 'Google Gemini',
+    keySlot: 'daisy-gpt-gemini-key',
+    models: [
+      { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', thinking: true },
+      { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash', thinking: true },
+      { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite' },
+      { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', thinking: true },
+      { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', thinking: true },
+    ],
+
+    _formatContents(messages) {
+      return messages.map(m => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }],
+      }));
+    },
+
+    async call(apiKey, model, systemPrompt, messages, onToken, signal, options = {}) {
+      const body = {
+        contents: this._formatContents(messages),
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+      };
+      if (options.thinking) {
+        body.generationConfig = { thinkingConfig: { thinkingLevel: 'high' } };
+      }
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
+        {
+          method: 'POST',
+          signal,
+          headers: {
+            'x-goog-api-key': apiKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        }
+      );
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error?.message || `API error ${response.status}`);
+      }
+
+      await readSSE(response, (event) => {
+        const parts = event.candidates?.[0]?.content?.parts;
+        if (!parts) return;
+        for (const part of parts) {
+          if (part.thought && options.onThinking) {
+            options.onThinking(part.text);
+          } else if (part.text && !part.thought) {
+            onToken(part.text);
+          }
+        }
+      });
+    },
+
+    async callSync(apiKey, model, systemPrompt, messages, options = {}) {
+      const body = {
+        contents: this._formatContents(messages),
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+      };
+      if (options.thinking) {
+        body.generationConfig = { thinkingConfig: { thinkingLevel: 'high' } };
+      }
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: 'POST',
+          headers: {
+            'x-goog-api-key': apiKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        }
+      );
+
+      if (!response.ok) throw new Error(`API error ${response.status}`);
+      const data = await response.json();
+      const parts = data.candidates?.[0]?.content?.parts || [];
+      const textParts = parts.filter(p => !p.thought);
+      return textParts.map(p => p.text).join('') || '';
+    },
+
+    async test(apiKey) {
+      const response = await fetch(
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+        {
+          method: 'POST',
+          headers: {
+            'x-goog-api-key': apiKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: 'hi' }] }],
+            generationConfig: { maxOutputTokens: 1 },
+          }),
+        }
+      );
+      if (!response.ok) throw new Error(`${response.status}`);
+    },
+  },
+
   openai: {
     name: 'OpenAI',
     keySlot: 'daisy-gpt-openai-key',
@@ -206,8 +311,11 @@ export const PROVIDERS = {
       { id: 'anthropic/claude-sonnet-4.6', label: 'Claude Sonnet 4.6', thinking: true },
       { id: 'openai/gpt-5.4', label: 'GPT-5.4', reasoning: true },
       { id: 'openai/gpt-5-mini', label: 'GPT-5 Mini', reasoning: true },
-      { id: 'google/gemini-3-flash-preview', label: 'Gemini 3 Flash' },
-      { id: 'deepseek/deepseek-v3.2', label: 'DeepSeek V3.2' },
+      { id: 'google/gemini-3-flash-preview', label: 'Gemini 3 Flash', thinking: true },
+      { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', thinking: true },
+      { id: 'deepseek/deepseek-v3.2', label: 'DeepSeek V3.2', reasoning: true },
+      { id: 'z-ai/glm-5', label: 'GLM-5', reasoning: true },
+      { id: 'moonshotai/kimi-k2.5', label: 'Kimi K2.5', reasoning: true },
       { id: 'openai/o3', label: 'o3', reasoning: true },
     ],
 
