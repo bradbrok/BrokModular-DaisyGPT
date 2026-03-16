@@ -417,13 +417,15 @@ select {
   overflow: hidden;
 }
 
-.code-highlight code {
+.code-highlight code,
+.code-highlight code.hljs {
   font-family: inherit;
   font-size: inherit;
   line-height: inherit;
   tab-size: inherit;
-  background: transparent;
-  padding: 0;
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0;
 }
 
 .code-textarea {
@@ -579,10 +581,12 @@ select {
   border-radius: 0;
 }
 
-.file-viewer-content code {
+.file-viewer-content code,
+.file-viewer-content code.hljs {
   font-family: inherit;
-  background: transparent;
-  padding: 0;
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0;
 }
 
 /* ─── Edit Diff Blocks ───────────────────────────────────────── */

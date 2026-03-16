@@ -620,6 +620,7 @@ function finalizeAssistantBubble(msgEl, fullText) {
 
   // Syntax highlight code blocks
   body.querySelectorAll('pre code').forEach(block => {
+    delete block.dataset.highlighted;
     if (window.hljs) hljs.highlightElement(block);
   });
 
@@ -2691,6 +2692,7 @@ function updateCodeHighlight() {
   const text = state.code || '';
   // Append a newline so the pre/code height always matches the textarea
   codeEl.textContent = text + (text.endsWith('\n') ? ' ' : '\n');
+  delete codeEl.dataset.highlighted;
   if (window.hljs) hljs.highlightElement(codeEl);
 }
 
@@ -2856,6 +2858,7 @@ function openFileViewer(path) {
     const lang = langMap[ext] || '';
     codeEl.className = lang ? `language-${lang}` : '';
     codeEl.textContent = entry.content + '\n';
+    delete codeEl.dataset.highlighted;
     if (window.hljs) hljs.highlightElement(codeEl);
   }
 
@@ -2909,11 +2912,18 @@ function initCodePanel() {
   // Code editor sync and cursor position
   const editor = $('#code-editor');
   const highlight = $('#code-highlight');
+  let highlightTimer;
   if (editor) {
     editor.addEventListener('input', () => {
       if (!editor.readOnly) {
         syncEditorToCode();
-        updateCodeHighlight();
+        const codeEl = $('#code-highlight-code');
+        if (codeEl) {
+          const text = state.code || '';
+          codeEl.textContent = text + (text.endsWith('\n') ? ' ' : '\n');
+        }
+        clearTimeout(highlightTimer);
+        highlightTimer = setTimeout(updateCodeHighlight, 150);
       }
     });
 
