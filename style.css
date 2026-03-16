@@ -2176,3 +2176,107 @@ input[type="range"]::-webkit-slider-thumb:active {
   vertical-align: middle;
   margin-right: 6px;
 }
+
+/* ─── Board Badge (header) ─────────────────────────────────────── */
+.board-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-gold);
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
+}
+.board-badge::before {
+  content: '\25C6';
+  font-size: 8px;
+  opacity: 0.6;
+}
+
+/* ─── Board Wizard Modal ───────────────────────────────────────── */
+.modal-board-wizard {
+  max-width: 640px;
+  width: 90vw;
+}
+.board-wizard-subtitle {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+.board-wizard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.board-wizard-card {
+  background: var(--bg-input);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.board-wizard-card:hover {
+  border-color: var(--accent-gold-dim);
+  background: rgba(255, 215, 0, 0.04);
+}
+.board-wizard-card.selected {
+  border-color: var(--accent-gold);
+  background: rgba(255, 215, 0, 0.08);
+}
+.board-wizard-card-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.board-wizard-card-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.board-wizard-detail {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+.board-wizard-detail-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-gold);
+  margin-bottom: 4px;
+}
+.board-wizard-detail-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.board-wizard-detail-io {
+  font-size: 11px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  line-height: 1.6;
+}
+.board-wizard-warning {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: rgba(255, 215, 0, 0.06);
+  border: 1px solid rgba(255, 215, 0, 0.15);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+}
+.board-wizard-warning strong {
+  color: var(--accent-gold);
+}
