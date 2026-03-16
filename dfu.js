@@ -292,15 +292,12 @@ export class DaisyDFU {
     this.log(`Flash complete! ${bytesWritten} bytes written.`);
   }
 
-  /** Wait for device to disconnect and reconnect (e.g., after bootloader flash) */
-  async waitForReconnect(timeoutMs = 10000) {
-    const device = this.device;
-    await this.close();
-
+  /** Wait for a DFU device to connect via WebUSB connect event */
+  async waitForReconnect(timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         navigator.usb.removeEventListener('connect', onConnect);
-        reject(new Error('Device did not reconnect'));
+        reject(new Error('Device did not reconnect. Tap RESET on Daisy and try again.'));
       }, timeoutMs);
 
       const onConnect = async (event) => {
@@ -308,8 +305,7 @@ export class DaisyDFU {
         if (dev.vendorId === 0x0483 && dev.productId === 0xDF11) {
           clearTimeout(timer);
           navigator.usb.removeEventListener('connect', onConnect);
-          // Small delay for device to fully initialize
-          await this._sleep(1000);
+          await this._sleep(1500); // Let device fully initialize
           this.device = dev;
           resolve();
         }
@@ -321,7 +317,7 @@ export class DaisyDFU {
 
   /**
    * Two-phase QSPI flash:
-   *   Phase 1: Flash bootloader to internal flash (if needed)
+   *   Phase 1: Flash bootloader to internal flash (if needed), then reconnect
    *   Phase 2: Flash app to QSPI via Daisy bootloader
    */
   async flashQSPI(appFirmware, bootloaderFirmware, appAddress = QSPI_BASE) {
@@ -332,21 +328,26 @@ export class DaisyDFU {
       this.log('ROM bootloader detected — flashing Daisy bootloader...');
       await this.flash(bootloaderFirmware, FLASH_BASE);
 
-      this.log('Waiting for Daisy bootloader to start...');
-      await this.waitForReconnect(10000);
+      // ROM bootloader is manifestation-tolerant — device won't auto-reset.
+      // Close and wait for reconnect (user taps RESET, or we get auto-reconnect).
+      this.log('Bootloader flashed! Tap RESET on your Daisy...');
+      await this.close();
 
-      // Re-open the device (now running Daisy bootloader)
+      // Wait for device to reconnect (user resets the board)
+      await this.waitForReconnect(30000);
       await this.open();
 
       if (!this.isDaisyBootloader()) {
-        throw new Error('Expected Daisy bootloader after reset, but interface not found');
+        // Might still be ROM bootloader if user held BOOT during reset.
+        // Ask them to just tap RESET without holding BOOT.
+        throw new Error('Daisy bootloader not detected. Tap RESET (without holding BOOT) and try again.');
       }
       this.log('Daisy bootloader connected!');
 
     } else if (this.isDaisyBootloader()) {
       this.log('Daisy bootloader already running');
     } else {
-      throw new Error('Unknown bootloader — cannot determine device type from interfaces');
+      throw new Error('Cannot determine bootloader type from device');
     }
 
     // Phase 2: Flash app to QSPI
