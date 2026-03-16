@@ -105,20 +105,23 @@ def _compile_qspi_programmer(files, board):
         if os.path.isdir(build_dir):
             shutil.rmtree(build_dir)
 
-        # Remove user source files, copy programmer source
+        # Remove user source files and old Makefile, copy programmer source + minimal Makefile
         for fn in list(files.keys()):
             path = os.path.join(tmpdir, fn)
             if os.path.exists(path):
                 os.remove(path)
+        os.remove(os.path.join(tmpdir, 'Makefile'))
 
         shutil.copy(
             os.path.join(TEMPLATE_DIR, 'qspi_programmer.cpp'),
             tmpdir,
         )
+        shutil.copy(
+            os.path.join(TEMPLATE_DIR, 'Makefile.programmer'),
+            os.path.join(tmpdir, 'Makefile'),
+        )
 
         env2 = _base_env(board)
-        # Flash boot target — the programmer lives in internal flash
-        # BOOT_TARGET is not set, so Makefile defaults to flash
         env2['CPP_SOURCES'] = 'qspi_programmer.cpp'
 
         _run_make(tmpdir, env2)
