@@ -28,7 +28,9 @@
         <option value="anthropic">Anthropic</option>
         <option value="openai">OpenAI</option>
         <option value="openrouter">OpenRouter</option>
+        <option value="gemini">Gemini</option>
         <option value="ollama">Ollama (Local)</option>
+        <option value="custom">Custom Endpoint</option>
       </select>
       <select id="model-select"></select>
       <div class="thinking-controls" id="thinking-controls">
@@ -321,6 +323,31 @@
         <button class="btn btn-test" data-provider="openrouter">Test</button>
         <span class="key-status" id="key-status-openrouter"></span>
       </div>
+    </div>
+
+    <div class="key-row">
+      <label>Gemini</label>
+      <div class="key-input-row">
+        <input type="password" id="key-gemini" placeholder="AIza...">
+        <button class="btn btn-test" data-provider="gemini">Test</button>
+        <span class="key-status" id="key-status-gemini"></span>
+      </div>
+    </div>
+
+    <div class="key-row" id="custom-endpoint-row">
+      <label>Custom Endpoint</label>
+      <div class="key-input-row">
+        <input type="text" id="custom-endpoint-url" placeholder="https://api.example.com/v1">
+      </div>
+      <div class="key-input-row" style="margin-top: 4px;">
+        <input type="password" id="key-custom" placeholder="API key (optional)">
+        <button class="btn btn-test" data-provider="custom">Test</button>
+        <span class="key-status" id="key-status-custom"></span>
+      </div>
+      <div class="key-input-row" style="margin-top: 4px;">
+        <input type="text" id="custom-endpoint-model" placeholder="Model ID (e.g. gpt-4o)">
+      </div>
+      <div class="ollama-hint">OpenAI-compatible endpoint. Posts to {Base URL}/chat/completions.</div>
     </div>
 
     <div class="key-row">

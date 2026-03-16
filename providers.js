@@ -1,5 +1,5 @@
 // daisy-gpt — multi-provider LLM support
-// Anthropic, OpenAI (Responses API), OpenRouter (Chat Completions), Ollama (Local)
+// Anthropic, OpenAI (Responses API), OpenRouter (Chat Completions), Gemini, Ollama (Local), Custom Endpoint
 
 const OLLAMA_CORS_HINT = 'Cannot reach Ollama. Make sure it\'s running and started with OLLAMA_ORIGINS=* for browser access.';
 
@@ -283,6 +283,79 @@ export const PROVIDERS = {
     },
   },
 
+  gemini: {
+    name: 'Gemini',
+    keySlot: 'daisy-gpt-gemini-key',
+    models: [
+      { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+      { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+      { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+    ],
+
+    _buildContents(messages) {
+      return messages.map(m => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }],
+      }));
+    },
+
+    async call(apiKey, model, systemPrompt, messages, onToken, signal) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${encodeURIComponent(apiKey)}&alt=sse`;
+      const body = {
+        contents: this._buildContents(messages),
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+      };
+
+      const response = await fetch(url, {
+        method: 'POST',
+        signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error?.message || `Gemini API error ${response.status}`);
+      }
+
+      await readSSE(response, (event) => {
+        const text = event.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) onToken(text);
+      });
+    },
+
+    async callSync(apiKey, model, systemPrompt, messages) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      const body = {
+        contents: this._buildContents(messages),
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+      };
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) throw new Error(`Gemini API error ${response.status}`);
+      const data = await response.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    },
+
+    async test(apiKey) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+          generationConfig: { maxOutputTokens: 1 },
+        }),
+      });
+      if (!response.ok) throw new Error(`${response.status}`);
+    },
+  },
+
   ollama: {
     name: 'Ollama (Local)',
     keySlot: 'daisy-gpt-ollama-key',
@@ -383,6 +456,103 @@ export const PROVIDERS = {
       if (!response.ok) throw new Error(`Ollama error ${response.status}`);
     },
   },
+
+  custom: {
+    name: 'Custom Endpoint',
+    keySlot: 'daisy-gpt-custom-key',
+    models: [],
+
+    getBaseUrl() {
+      return localStorage.getItem('daisy-gpt-custom-url') || '';
+    },
+
+    getModelId() {
+      return localStorage.getItem('daisy-gpt-custom-model') || '';
+    },
+
+    async call(apiKey, model, systemPrompt, messages, onToken, signal) {
+      const baseUrl = this.getBaseUrl();
+      if (!baseUrl) throw new Error('Custom endpoint: no base URL configured');
+      if (!model) throw new Error('Custom endpoint: no model configured');
+
+      const chatMessages = [
+        { role: 'system', content: systemPrompt },
+        ...messages,
+      ];
+
+      const url = `${baseUrl}/chat/completions`;
+      const headers = { 'Content-Type': 'application/json' };
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        signal,
+        headers,
+        body: JSON.stringify({
+          model,
+          messages: chatMessages,
+          stream: true,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error?.message || `Custom endpoint error ${response.status}`);
+      }
+
+      await readSSE(response, (event) => {
+        const content = event.choices?.[0]?.delta?.content;
+        if (content) onToken(content);
+      });
+    },
+
+    async callSync(apiKey, model, systemPrompt, messages) {
+      const baseUrl = this.getBaseUrl();
+      if (!baseUrl) throw new Error('Custom endpoint: no base URL configured');
+      if (!model) throw new Error('Custom endpoint: no model configured');
+
+      const chatMessages = [
+        { role: 'system', content: systemPrompt },
+        ...messages,
+      ];
+
+      const url = `${baseUrl}/chat/completions`;
+      const headers = { 'Content-Type': 'application/json' };
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model, messages: chatMessages }),
+      });
+
+      if (!response.ok) throw new Error(`Custom endpoint error ${response.status}`);
+      const data = await response.json();
+      return data.choices?.[0]?.message?.content || '';
+    },
+
+    async test(apiKey) {
+      const baseUrl = this.getBaseUrl();
+      if (!baseUrl) throw new Error('No base URL configured');
+      const model = this.getModelId();
+      if (!model) throw new Error('No model configured');
+
+      const url = `${baseUrl}/chat/completions`;
+      const headers = { 'Content-Type': 'application/json' };
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: 'hi' }],
+          max_tokens: 1,
+        }),
+      });
+      if (!response.ok) throw new Error(`${response.status}`);
+    },
+  },
 };
 
 // Shared SSE reader
@@ -434,6 +604,36 @@ export function getOllamaUrl() {
 
 export function setOllamaUrl(url) {
   localStorage.setItem('daisy-gpt-ollama-url', url.replace(/\/+$/, ''));
+}
+
+// Custom model per provider
+export function getCustomModel(providerId) {
+  return localStorage.getItem(`daisy-gpt-custom-model-${providerId}`) || '';
+}
+
+export function setCustomModel(providerId, modelId) {
+  if (modelId) {
+    localStorage.setItem(`daisy-gpt-custom-model-${providerId}`, modelId);
+  } else {
+    localStorage.removeItem(`daisy-gpt-custom-model-${providerId}`);
+  }
+}
+
+// Custom endpoint URL helpers
+export function getCustomUrl() {
+  return localStorage.getItem('daisy-gpt-custom-url') || '';
+}
+
+export function setCustomUrl(url) {
+  localStorage.setItem('daisy-gpt-custom-url', url.replace(/\/+$/, ''));
+}
+
+export function getCustomEndpointModel() {
+  return localStorage.getItem('daisy-gpt-custom-model') || '';
+}
+
+export function setCustomEndpointModel(model) {
+  localStorage.setItem('daisy-gpt-custom-model', model);
 }
 
 // Migrate old single key to anthropic slot

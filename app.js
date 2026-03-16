@@ -4,7 +4,7 @@
 import { skills, skillNames } from './skills/index.js';
 import { DAISYSP_REFERENCE } from './reference/daisysp_ref.js';
 import { DaisyDFU, isWebUSBSupported, isChromeBrowser } from './dfu.js';
-import { PROVIDERS, getApiKey, setApiKey, migrateOldKey, getOllamaUrl, setOllamaUrl } from './providers.js';
+import { PROVIDERS, getApiKey, setApiKey, migrateOldKey, getOllamaUrl, setOllamaUrl, getCustomModel, setCustomModel, getCustomUrl, setCustomUrl, getCustomEndpointModel, setCustomEndpointModel } from './providers.js';
 import { MIDIController } from './midi.js';
 import { WasmClangCompiler } from './compiler.js';
 
@@ -142,6 +142,7 @@ ${DAISYSP_REFERENCE}`;
 
 function currentApiKey() {
   if (state.provider === 'ollama') return 'ollama';
+  if (state.provider === 'custom') return getApiKey('custom') || 'custom';
   return getApiKey(state.provider);
 }
 
@@ -1806,6 +1807,36 @@ function populateModelDropdown() {
   }
 
   clearSelectOptions(select);
+
+  // For custom endpoint, use the configured model as the only option
+  if (state.provider === 'custom') {
+    const modelId = getCustomEndpointModel();
+    if (modelId) {
+      const opt = document.createElement('option');
+      opt.value = modelId;
+      opt.textContent = modelId;
+      select.appendChild(opt);
+      state.model = modelId;
+      select.value = modelId;
+      localStorage.setItem('daisy-gpt-model', state.model);
+    } else {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Configure model in settings';
+      select.appendChild(opt);
+    }
+    return;
+  }
+
+  // Inject custom model at top if configured
+  const customModelId = getCustomModel(state.provider);
+  if (customModelId) {
+    const opt = document.createElement('option');
+    opt.value = customModelId;
+    opt.textContent = `Custom: ${customModelId}`;
+    select.appendChild(opt);
+  }
+
   for (const m of provider.models) {
     const opt = document.createElement('option');
     opt.value = m.id;
@@ -1813,11 +1844,14 @@ function populateModelDropdown() {
     select.appendChild(opt);
   }
 
-  const hasModel = provider.models.some(m => m.id === state.model);
+  const allModels = customModelId
+    ? [customModelId, ...provider.models.map(m => m.id)]
+    : provider.models.map(m => m.id);
+  const hasModel = allModels.includes(state.model);
   if (hasModel) {
     select.value = state.model;
-  } else if (provider.models.length > 0) {
-    state.model = provider.models[0].id;
+  } else if (allModels.length > 0) {
+    state.model = allModels[0];
     select.value = state.model;
     localStorage.setItem('daisy-gpt-model', state.model);
   }
@@ -1891,6 +1925,12 @@ function showApiKeyModal() {
     const compileUrlInput = $('#compile-server-url');
     if (compileUrlInput) compileUrlInput.value = state.remoteCompileUrl;
 
+    // Custom endpoint fields
+    const customUrlInput = $('#custom-endpoint-url');
+    if (customUrlInput) customUrlInput.value = getCustomUrl();
+    const customModelInput = $('#custom-endpoint-model');
+    if (customModelInput) customModelInput.value = getCustomEndpointModel();
+
     if (state.provider === 'ollama') {
       ollamaUrlInput?.focus();
     } else {
@@ -1921,6 +1961,15 @@ function saveAllKeys() {
     state.remoteCompileUrl = url;
     localStorage.setItem('daisy-gpt-compile-url', url);
   }
+  // Save custom endpoint config
+  const customUrlInput = $('#custom-endpoint-url');
+  if (customUrlInput) {
+    setCustomUrl(customUrlInput.value.trim() || '');
+  }
+  const customModelInput = $('#custom-endpoint-model');
+  if (customModelInput) {
+    setCustomEndpointModel(customModelInput.value.trim());
+  }
   hideApiKeyModal();
   updateUI();
 }
@@ -1928,6 +1977,27 @@ function saveAllKeys() {
 async function testProviderKey(providerId) {
   const status = $(`#key-status-${providerId}`);
   if (!status) return;
+
+  // Custom endpoint: save URL + model before testing
+  if (providerId === 'custom') {
+    const urlInput = $('#custom-endpoint-url');
+    if (urlInput) setCustomUrl(urlInput.value.trim() || '');
+    const modelInput = $('#custom-endpoint-model');
+    if (modelInput) setCustomEndpointModel(modelInput.value.trim());
+    const keyInput = $(`#key-custom`);
+    const key = keyInput ? keyInput.value.trim() : '';
+    status.textContent = '...';
+    try {
+      await PROVIDERS.custom.test(key);
+      status.textContent = '\u2713';
+      status.style.color = 'var(--accent-gold)';
+    } catch (e) {
+      status.textContent = '\u2717';
+      status.style.color = 'var(--accent-red)';
+      setStatus('error', e.message);
+    }
+    return;
+  }
 
   // Ollama: test connectivity, no API key needed
   if (providerId === 'ollama') {
