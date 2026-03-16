@@ -295,9 +295,9 @@ export class DaisyDFU {
     let status = await this.getStatus();
     if (status.state === DFU_STATE.dfuERROR) {
       await this.clearStatus();
+      status = await this.getStatus();
     }
     if (status.state !== DFU_STATE.dfuIDLE) {
-      // Try abort
       await this.device.controlTransferOut({
         requestType: 'class',
         recipient: 'interface',
@@ -305,48 +305,50 @@ export class DaisyDFU {
         value: 0,
         index: this.interfaceNumber,
       });
-      await this.waitForState(DFU_STATE.dfuIDLE);
-    }
-
-    // Only select alternate interface if device has multiple alternates
-    // (STM32 ROM bootloader typically has one — calling selectAlternateInterface breaks it)
-    if (this.alternates.length > 1) {
-      await this.selectAlternateForAddress(baseAddress);
+      status = await this.getStatus();
+      if (status.state === DFU_STATE.dfuERROR) {
+        await this.clearStatus();
+        status = await this.getStatus();
+      }
+      if (status.state !== DFU_STATE.dfuIDLE) {
+        throw new Error(`Cannot reach dfuIDLE (stuck in state ${status.state})`);
+      }
     }
 
     // Erase sectors that will be written
-    // Internal flash: 128KB sectors (0x20000), QSPI flash: 64KB sectors (0x10000)
-    const isQSPI = baseAddress >= QSPI_BASE;
-    const sectorSize = isQSPI ? 0x10000 : 0x20000;
+    const sectorSize = 0x20000; // 128KB for STM32H750 internal flash
     const startSector = baseAddress;
     const endSector = baseAddress + totalBytes;
     for (let addr = startSector; addr < endSector; addr += sectorSize) {
       this.log(`Erasing sector at 0x${addr.toString(16)}...`);
       await this.eraseSector(addr);
-      if (this.onProgress) {
-        this.onProgress({ phase: 'erase', current: addr - startSector, total: endSector - startSector });
-      }
     }
+    this.log('Erase complete, writing...');
 
     // Set start address
     await this.setAddress(baseAddress);
 
     // Write data in blocks
-    let blockNum = 2; // block 0 and 1 are for DFU commands
+    let blockNum = 2;
     for (let offset = 0; offset < totalBytes; offset += blockSize) {
       const end = Math.min(offset + blockSize, totalBytes);
       const chunk = new Uint8Array(firmware.slice(offset, end));
 
       await this.download(blockNum, chunk);
 
+      // STM32 DFU: DNLOAD → dfuDNLOAD_SYNC → (getStatus) → dfuDNBUSY → (getStatus) → dfuDNLOAD_IDLE
       status = await this.getStatus();
-      while (status.state === DFU_STATE.dfuDNBUSY) {
+      // Handle DNLOAD_SYNC: need another getStatus to trigger programming
+      if (status.state === DFU_STATE.dfuDNLOAD_SYNC) {
+        status = await this.getStatus();
+      }
+      if (status.state === DFU_STATE.dfuDNBUSY) {
         await this._sleep(status.pollTimeout || 10);
         status = await this.getStatus();
       }
 
       if (status.state !== DFU_STATE.dfuDNLOAD_IDLE) {
-        throw new Error(`Unexpected state ${status.state} during download`);
+        throw new Error(`Write failed at offset ${offset}: state ${status.state}`);
       }
 
       bytesWritten += chunk.byteLength;
@@ -362,10 +364,17 @@ export class DaisyDFU {
       }
     }
 
+    this.log(`Writing done, manifesting...`);
+
     // Send zero-length download to signal end
     await this.download(0, new ArrayBuffer(0));
     try {
-      await this.getStatus();
+      status = await this.getStatus();
+      // Wait for manifest if needed
+      if (status.state === DFU_STATE.dfuMANIFEST_SYNC || status.state === DFU_STATE.dfuMANIFEST) {
+        await this._sleep(status.pollTimeout || 100);
+        try { await this.getStatus(); } catch (e) { /* device resets */ }
+      }
     } catch (e) {
       // Device may reset here — that's expected
     }
