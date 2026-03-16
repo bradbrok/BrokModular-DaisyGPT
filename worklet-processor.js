@@ -24,6 +24,19 @@ class DaisyProcessor extends AudioWorkletProcessor {
     this.sampleLoop = true;
     this.samplePlaying = false;
 
+    // Signal generator state — feeds CV inputs
+    this.sigGen = {
+      enabled: false,
+      target: 0,         // CV input index (0-3)
+      mode: 'wave',      // 'gate' | 'wave' | 'noise' | 'audioin'
+      waveform: 'sin',   // 'sin' | 'tri' | 'saw' | 'square'
+      freq: 1.0,         // Hz
+      phase: 0,
+      gateState: false,
+      gateFreq: 2.0,     // gate toggle rate in Hz
+      noiseSeed: 12345,
+    };
+
     this.port.onmessage = (e) => {
       const { type } = e.data;
 
@@ -83,6 +96,8 @@ class DaisyProcessor extends AudioWorkletProcessor {
         this.samplePosition = 0;
       } else if (type === 'sample-loop') {
         this.sampleLoop = e.data.loop;
+      } else if (type === 'set-siggen') {
+        Object.assign(this.sigGen, e.data.config);
       } else if (type === 'stop') {
         this.ready = false;
         this.wasmInstance = null;
@@ -260,6 +275,44 @@ class DaisyProcessor extends AudioWorkletProcessor {
     const input = inputs[0];
     const inL = (input && input.length > 0) ? input[0] : null;
     const inR = (input && input.length > 1) ? input[1] : inL;
+
+    // Signal generator — compute one value per block and write to CV input
+    if (this.sigGen.enabled && this.wasmInstance && this.wasmInstance.exports.setCvIn) {
+      const sg = this.sigGen;
+      let cvVal = 0;
+      const phaseInc = sg.freq / sampleRate;
+
+      if (sg.mode === 'gate') {
+        // Square wave gate at gateFreq Hz — output 0.0 or 1.0
+        sg.phase += sg.gateFreq / sampleRate * blockSize;
+        if (sg.phase >= 1.0) sg.phase -= Math.floor(sg.phase);
+        cvVal = sg.phase < 0.5 ? 1.0 : 0.0;
+      } else if (sg.mode === 'wave') {
+        // Advance phase by one block
+        sg.phase += phaseInc * blockSize;
+        if (sg.phase >= 1.0) sg.phase -= Math.floor(sg.phase);
+        const p = sg.phase;
+        switch (sg.waveform) {
+          case 'sin':    cvVal = Math.sin(p * 2 * Math.PI) * 0.5 + 0.5; break;
+          case 'tri':    cvVal = p < 0.5 ? p * 2 : 2 - p * 2; break;
+          case 'saw':    cvVal = p; break;
+          case 'square': cvVal = p < 0.5 ? 1.0 : 0.0; break;
+          default:       cvVal = Math.sin(p * 2 * Math.PI) * 0.5 + 0.5; break;
+        }
+      } else if (sg.mode === 'noise') {
+        sg.noiseSeed = (sg.noiseSeed * 1664525 + 1013904223) >>> 0;
+        cvVal = sg.noiseSeed / 4294967296;
+      } else if (sg.mode === 'audioin') {
+        // Use RMS of the audio input as a CV value
+        if (inL) {
+          let sum = 0;
+          for (let i = 0; i < blockSize; i++) sum += inL[i] * inL[i];
+          cvVal = Math.min(Math.sqrt(sum / blockSize) * 4, 1.0);
+        }
+      }
+
+      this.wasmInstance.exports.setCvIn(sg.target, cvVal);
+    }
 
     try {
       const exports = this.wasmInstance.exports;

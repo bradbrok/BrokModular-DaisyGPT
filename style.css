@@ -1029,6 +1029,93 @@ input[type="range"]::-webkit-slider-thumb:active {
   transform: scale(0.97);
 }
 
+/* Signal Generator panel */
+.siggen-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.siggen-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.siggen-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.siggen-toggle {
+  margin: 0;
+}
+
+.siggen-header select {
+  flex: 1;
+  min-width: 60px;
+  font-size: 11px;
+  padding: 3px 6px;
+}
+
+.siggen-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.siggen-mode-row select {
+  width: 100%;
+  font-size: 11px;
+  padding: 3px 6px;
+}
+
+.siggen-wave-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.siggen-wave-row select {
+  width: 100%;
+  font-size: 11px;
+  padding: 3px 6px;
+}
+
+.siggen-freq-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.siggen-freq-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.siggen-freq-val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-gold);
+  min-width: 60px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.siggen-gate-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 /* MIDI panel */
 .midi-group {
   display: flex;
