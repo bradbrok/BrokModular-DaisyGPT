@@ -110,9 +110,11 @@ export const PROVIDERS = {
     keySlot: 'daisy-gpt-openai-key',
     models: [
       { id: 'gpt-5.4', label: 'GPT-5.4', reasoning: true },
+      { id: 'gpt-5.3', label: 'GPT-5.3 Instant' },
+      { id: 'gpt-5.2', label: 'GPT-5.2' },
       { id: 'gpt-5-mini', label: 'GPT-5 Mini', reasoning: true },
       { id: 'o3', label: 'o3', reasoning: true },
-      { id: 'o4-mini', label: 'o4-mini', reasoning: true },
+      { id: 'o3-pro', label: 'o3 Pro', reasoning: true },
     ],
 
     async call(apiKey, model, systemPrompt, messages, onToken, signal, options = {}) {
@@ -204,8 +206,9 @@ export const PROVIDERS = {
       { id: 'anthropic/claude-sonnet-4.6', label: 'Claude Sonnet 4.6', thinking: true },
       { id: 'openai/gpt-5.4', label: 'GPT-5.4', reasoning: true },
       { id: 'openai/gpt-5-mini', label: 'GPT-5 Mini', reasoning: true },
-      { id: 'google/gemini-3-flash-preview', label: 'Gemini 3 Flash' },
-      { id: 'deepseek/deepseek-v3.2', label: 'DeepSeek V3.2' },
+      { id: 'google/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro (Preview)' },
+      { id: 'google/gemini-3-flash-preview', label: 'Gemini 3 Flash (Preview)' },
+      { id: 'deepseek/deepseek-v4', label: 'DeepSeek V4' },
       { id: 'openai/o3', label: 'o3', reasoning: true },
     ],
 
@@ -287,9 +290,11 @@ export const PROVIDERS = {
     name: 'Gemini',
     keySlot: 'daisy-gpt-gemini-key',
     models: [
+      { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro (Preview)', thinking: true },
+      { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash (Preview)', thinking: true },
       { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-      { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-      { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+      { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+      { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' },
     ],
 
     _buildContents(messages) {
@@ -343,7 +348,7 @@ export const PROVIDERS = {
     },
 
     async test(apiKey) {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
