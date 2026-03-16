@@ -19,13 +19,15 @@ const CDN = 'https://binji.github.io/wasm-clang/';
 
 const WRAPPER_PREFIX = `\
 extern "C" {
-  float daisy_knob[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+  float daisy_knob[8] = {0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f};
   bool  daisy_gate[2] = {false, false};
+  bool  daisy_gate_out[2] = {false, false};
   float daisy_sample_rate = 48000.0f;
   float daisy_pitch_cv = 0.0f;
   float daisy_velocity = 0.0f;
   float daisy_pitchbend = 0.0f;
   float daisy_cv_in[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  float daisy_cv_out[2] = {0.0f, 0.0f};
 }
 `;
 
@@ -75,11 +77,15 @@ void processBlock(int size) {
 }
 
 void setKnob(int index, float value) {
-    if (index >= 0 && index < 4) daisy_knob[index] = value;
+    if (index >= 0 && index < 8) daisy_knob[index] = value;
 }
 
 void setGate(int index, int value) {
     if (index >= 0 && index < 2) daisy_gate[index] = (value != 0);
+}
+
+void setCvIn(int index, float value) {
+    if (index >= 0 && index < 4) daisy_cv_in[index] = value;
 }
 
 void setPitchCV(float cv) { daisy_pitch_cv = cv; }

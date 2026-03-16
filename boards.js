@@ -288,37 +288,37 @@ int main(void) {
     promptFragment: `You are programming a Daisy Patch Submodule (Patch SM) — a powerful Eurorack DSP platform.
 
 Hardware:
-- Global object: \`DaisyPatchSM patch_sm;\` (in namespace \`daisy::patch_sm\`)
-- Init: \`patch_sm.Init();\` then \`patch_sm.StartAudio(AudioCallback);\`
+- Global object: \`DaisyPatchSM hw;\` (in namespace \`daisy::patch_sm\`)
+- Init: \`hw.Init();\` then \`hw.StartAudio(AudioCallback);\`
 - Audio callback: \`void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size)\`
 - 12 ADC inputs (16-bit, bipolar CV or potentiometer):
-  - Access via \`patch_sm.GetAdcValue(CV_1)\` through CV_8 for first 8 (returns 0.0-1.0)
+  - Access via \`hw.GetAdcValue(CV_1)\` through CV_8 for first 8 (returns 0.0-1.0)
   - Additional ADC channels: C5, C3, C4, C2, C6, C7, C8, C9
-  - Call \`patch_sm.ProcessAllControls();\` at the start of each AudioCallback
+  - Call \`hw.ProcessAllControls();\` at the start of each AudioCallback
 - 2 CV outputs (12-bit DAC, 0-5V):
-  - \`patch_sm.WriteCvOut(CV_OUT_1, voltage);\` and \`patch_sm.WriteCvOut(CV_OUT_2, voltage);\`
+  - \`hw.WriteCvOut(CV_OUT_1, voltage);\` and \`hw.WriteCvOut(CV_OUT_2, voltage);\`
   - Voltage range: 0.0 to 5.0
 - 2 gate inputs:
-  - \`patch_sm.gate_in_1.State()\` — returns true/false
-  - \`patch_sm.gate_in_2.State()\` — returns true/false
-  - \`patch_sm.gate_in_1.Trig()\` — returns true on rising edge
+  - \`hw.gate_in_1.State()\` — returns true/false
+  - \`hw.gate_in_2.State()\` — returns true/false
+  - \`hw.gate_in_1.Trig()\` — returns true on rising edge
 - 2 gate outputs:
-  - \`dsy_gpio_write(&patch_sm.gate_out_1, true/false);\`
-  - \`dsy_gpio_write(&patch_sm.gate_out_2, true/false);\`
+  - \`dsy_gpio_write(&hw.gate_out_1, true/false);\`
+  - \`dsy_gpio_write(&hw.gate_out_2, true/false);\`
 - Stereo audio I/O (2-in, 2-out) at up to 96kHz / 24-bit
 - No built-in OLED — user may add external display
-- User LED: \`patch_sm.SetLed(true/false);\`
+- User LED: \`hw.SetLed(true/false);\`
 - 12 GPIO pins available for buttons, encoders, LEDs, etc.
 
 When generating code:
 1. Include "daisy_patch_sm.h" and "daisysp.h"
 2. Use \`using namespace daisy; using namespace patch_sm; using namespace daisysp;\`
-3. Declare \`DaisyPatchSM patch_sm;\` as global
-4. Use \`patch_sm.ProcessAllControls();\` at the start of AudioCallback
+3. Declare \`DaisyPatchSM hw;\` as global
+4. Use \`hw.ProcessAllControls();\` at the start of AudioCallback
 5. Use all available CV inputs for rich parameter control
 
 CRITICAL — KNOB LABELS: Add a short \`// Label\` comment at the end of EVERY line that reads a CV input:
-\`float freq = fmap(patch_sm.GetAdcValue(CV_1), 20.f, 2000.f, Mapping::LOG); // Frequency\`
+\`float freq = fmap(hw.GetAdcValue(CV_1), 20.f, 2000.f, Mapping::LOG); // Frequency\`
 
 Use \`fmap()\` for knob/CV scaling (with Mapping::LOG for frequency-like params).`,
     template: `#include "daisy_patch_sm.h"
@@ -328,36 +328,36 @@ using namespace daisy;
 using namespace patch_sm;
 using namespace daisysp;
 
-DaisyPatchSM patch_sm;
+DaisyPatchSM hw;
 Oscillator osc;
 
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
-    patch_sm.ProcessAllControls();
-    float freq = fmap(patch_sm.GetAdcValue(CV_1), 20.f, 2000.f, Mapping::LOG); // Frequency
-    float amp = patch_sm.GetAdcValue(CV_2); // Volume
-    float detune = fmap(patch_sm.GetAdcValue(CV_3), 0.f, 0.05f); // Detune
-    float filter_freq = fmap(patch_sm.GetAdcValue(CV_4), 200.f, 18000.f, Mapping::LOG); // Filter
+    hw.ProcessAllControls();
+    float freq = fmap(hw.GetAdcValue(CV_1), 20.f, 2000.f, Mapping::LOG); // Frequency
+    float amp = hw.GetAdcValue(CV_2); // Volume
+    float detune = fmap(hw.GetAdcValue(CV_3), 0.f, 0.05f); // Detune
+    float filter_freq = fmap(hw.GetAdcValue(CV_4), 200.f, 18000.f, Mapping::LOG); // Filter
     osc.SetFreq(freq);
     osc.SetAmp(amp);
     // Gate input trigger
-    bool gate = patch_sm.gate_in_1.Trig();
+    bool gate = hw.gate_in_1.Trig();
     for (size_t i = 0; i < size; i++) {
         float sig = osc.Process();
         out[0][i] = sig;
         out[1][i] = sig;
     }
     // Mirror gate input to gate output
-    dsy_gpio_write(&patch_sm.gate_out_1, patch_sm.gate_in_1.State());
+    dsy_gpio_write(&hw.gate_out_1, hw.gate_in_1.State());
     // CV output: frequency as voltage
-    patch_sm.WriteCvOut(CV_OUT_1, freq / 2000.f * 5.f);
+    hw.WriteCvOut(CV_OUT_1, freq / 2000.f * 5.f);
 }
 
 int main(void) {
-    patch_sm.Init();
-    osc.Init(patch_sm.AudioSampleRate());
+    hw.Init();
+    osc.Init(hw.AudioSampleRate());
     osc.SetWaveform(Oscillator::WAVE_SAW);
-    patch_sm.StartDac();
-    patch_sm.StartAudio(AudioCallback);
+    hw.StartDac();
+    hw.StartAudio(AudioCallback);
     while(1) {}
 }
 `,

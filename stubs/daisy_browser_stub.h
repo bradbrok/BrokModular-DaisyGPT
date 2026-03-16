@@ -35,10 +35,7 @@ inline float cvToFreq(float cv) {
     return 440.0f * powf(2.0f, cv - 0.75f);
 }
 
-// Mapping enum used by fmap()
-enum Mapping { LINEAR, EXP, LOG };
-
-// DaisySP utility functions (normally in Utility/dsp.h)
+// DaisySP utility macros (normally in Utility/dsp.h)
 #ifndef PI_F
 #define PI_F 3.14159265358979f
 #endif
@@ -49,7 +46,16 @@ enum Mapping { LINEAR, EXP, LOG };
 #define HALFPI_F 1.57079632679490f
 #endif
 
+// ============================================================
+// DaisySP DSP Module Stubs
+// ============================================================
+
+namespace daisysp {
+
+// --- Core utility functions ---
 static const float kOneTwelfth = 1.0f / 12.0f;
+
+enum Mapping { LINEAR, EXP, LOG };
 
 inline float mtof(float m) {
     return powf(2.0f, (m - 69.0f) / 12.0f) * 440.0f;
@@ -92,12 +98,6 @@ inline void fonepole(float& out, float in, float coeff) {
 inline void TestFloat(float& x, float y = 0.0f) {
     if (std::isnan(x) || std::isinf(x)) x = y;
 }
-
-// ============================================================
-// DaisySP DSP Module Stubs
-// ============================================================
-
-namespace daisysp {
 
 // --- Waveform enums ---
 enum {
@@ -1139,5 +1139,219 @@ struct DaisyPatch {
     void StartAdc() {}
     void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
                              daisy::AudioHandle::OutputBuffer, size_t)) {}
+    void StartAudio(void (*)(float**, float**, size_t)) {}
+
+    // Display stub (for DaisyPatch OLED)
+    struct Display {
+        void Fill(bool on) { (void)on; }
+        void SetCursor(int x, int y) { (void)x; (void)y; }
+        void WriteString(const char* str, int font, bool on) { (void)str; (void)font; (void)on; }
+        void Update() {}
+    } display;
+
+    void DisplayControls(bool invert) { (void)invert; }
+
+    struct Seed {
+        struct DacHandle {
+            enum Channel { ONE = 0, TWO = 1, BOTH = 2 };
+            void WriteValue(Channel ch, uint16_t val) { (void)ch; (void)val; }
+        } dac;
+    } seed;
+};
+
+// ─── DaisySeed stub ─────────────────────────────────────────────
+namespace daisy {
+
+struct DacHandle {
+    enum Channel { ONE = 0, TWO = 1, BOTH = 2 };
+    void WriteValue(Channel ch, uint16_t val) { (void)ch; (void)val; }
+};
+
+struct AdcChannelConfig {
+    void InitSingle(int pin) { (void)pin; }
+};
+
+struct AdcHandle {
+    void Init(AdcChannelConfig* cfg, int num) { (void)cfg; (void)num; }
+    void Start() {}
+    float GetFloat(int ch) const { return (ch >= 0 && ch < 8) ? daisy_knob[ch] : 0.f; }
+};
+
+class DaisySeed {
+public:
+    AdcHandle adc;
+    DacHandle dac;
+
+    void Init() {}
+    int GetPin(int pin) const { return pin; }
+    void SetAudioBlockSize(int) {}
+    float AudioSampleRate() const { return daisy_sample_rate; }
+    void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
+                              daisy::AudioHandle::OutputBuffer, size_t)) {}
+    void StartAudio(void (*)(float**, float**, size_t)) {}
+};
+
+} // namespace daisy
+using daisy::DaisySeed;
+
+// ─── DaisyPod stub ──────────────────────────────────────────────
+struct DaisyPod {
+    struct Knob {
+        float val = 0.5f;
+        void Process() {}
+        float Value() const { return val; }
+    } knob1, knob2;
+
+    struct Button {
+        bool pressed_ = false;
+        bool rising_ = false;
+        bool Pressed() const { return pressed_; }
+        bool RisingEdge() { bool r = rising_; rising_ = false; return r; }
+        bool FallingEdge() { return false; }
+    } button1, button2;
+
+    struct Encoder {
+        int inc_ = 0;
+        bool rising_ = false;
+        int Increment() { int i = inc_; inc_ = 0; return i; }
+        bool RisingEdge() { bool r = rising_; rising_ = false; return r; }
+        bool Pressed() const { return false; }
+    } encoder;
+
+    struct Led {
+        float r = 0.f, g = 0.f, b = 0.f;
+        void Set(float r_, float g_, float b_) { r = r_; g = g_; b = b_; }
+    } led1, led2;
+
+    void Init() {
+        knob1.val = daisy_knob[0];
+        knob2.val = daisy_knob[1];
+    }
+
+    void ProcessAllControls() {
+        knob1.val = daisy_knob[0];
+        knob2.val = daisy_knob[1];
+    }
+
+    void UpdateLeds() {}
+    void SetAudioBlockSize(int) {}
+    float AudioSampleRate() const { return daisy_sample_rate; }
+    void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
+                              daisy::AudioHandle::OutputBuffer, size_t)) {}
+    void StartAudio(void (*)(float**, float**, size_t)) {}
+};
+
+// ─── DaisyPetal stub ────────────────────────────────────────────
+struct DaisyPetal {
+    struct Knob {
+        float val = 0.5f;
+        void Process() {}
+        float Value() const { return val; }
+    } knob[6];
+
+    struct Switch {
+        bool state_ = false;
+        bool rising_ = false;
+        bool Pressed() const { return state_; }
+        bool RisingEdge() { bool r = rising_; rising_ = false; return r; }
+        bool FallingEdge() { return false; }
+    } switches[4];
+
+    struct Encoder {
+        int inc_ = 0;
+        bool rising_ = false;
+        int Increment() { int i = inc_; inc_ = 0; return i; }
+        bool RisingEdge() { bool r = rising_; rising_ = false; return r; }
+        bool Pressed() const { return false; }
+    } encoder;
+
+    void Init() {
+        for (int i = 0; i < 6; i++) knob[i].val = (i < 8) ? daisy_knob[i] : 0.5f;
+    }
+
+    void ProcessAllControls() {
+        for (int i = 0; i < 6; i++) {
+            knob[i].val = (i < 8) ? daisy_knob[i] : 0.5f;
+        }
+    }
+
+    void SetRingLed(int index, float r, float g, float b) {
+        (void)index; (void)r; (void)g; (void)b;
+    }
+    void SetFootswitchLed(int index, float brightness) {
+        (void)index; (void)brightness;
+    }
+    void UpdateLeds() {}
+    void SetAudioBlockSize(int) {}
+    float AudioSampleRate() const { return daisy_sample_rate; }
+    void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
+                              daisy::AudioHandle::OutputBuffer, size_t)) {}
+    void StartAudio(void (*)(float**, float**, size_t)) {}
+};
+
+// ─── DaisyField stub ────────────────────────────────────────────
+// Font stub
+struct FontDef {
+    int width;
+    int height;
+};
+static const FontDef Font_7x10 = {7, 10};
+static const FontDef Font_6x8 = {6, 8};
+static const FontDef Font_11x18 = {11, 18};
+static const FontDef Font_16x26 = {16, 26};
+
+struct DaisyField {
+    struct Knob {
+        float val = 0.5f;
+        void Process() {}
+        float Value() const { return val; }
+    } knob[8];
+
+    struct Display {
+        void Fill(bool on) { (void)on; }
+        void SetCursor(int x, int y) { (void)x; (void)y; }
+        void WriteString(const char* str, FontDef font, bool on) {
+            (void)str; (void)font; (void)on;
+        }
+        void Update() {}
+    } display;
+
+    struct LedDriver {
+        void SetLed(int index, float brightness) { (void)index; (void)brightness; }
+    } led_driver;
+
+    struct Seed {
+        daisy::DacHandle dac;
+    } seed;
+
+    bool keyboard_state_[16] = {};
+    bool keyboard_rising_[16] = {};
+    bool keyboard_falling_[16] = {};
+
+    void Init() {
+        for (int i = 0; i < 8; i++) knob[i].val = daisy_knob[i];
+    }
+
+    void ProcessAllControls() {
+        for (int i = 0; i < 8; i++) knob[i].val = daisy_knob[i];
+    }
+
+    bool KeyboardState(int key) const {
+        return (key >= 0 && key < 16) ? keyboard_state_[key] : false;
+    }
+    bool KeyboardRisingEdge(int key) {
+        if (key >= 0 && key < 16) { bool r = keyboard_rising_[key]; keyboard_rising_[key] = false; return r; }
+        return false;
+    }
+    bool KeyboardFallingEdge(int key) {
+        if (key >= 0 && key < 16) { bool f = keyboard_falling_[key]; keyboard_falling_[key] = false; return f; }
+        return false;
+    }
+
+    void UpdateLeds() {}
+    void SetAudioBlockSize(int) {}
+    float AudioSampleRate() const { return daisy_sample_rate; }
+    void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
+                              daisy::AudioHandle::OutputBuffer, size_t)) {}
     void StartAudio(void (*)(float**, float**, size_t)) {}
 };

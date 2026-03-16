@@ -70,6 +70,24 @@ struct DaisyPatch {
         return 0.5f;
     }
 
+    struct Display {
+        void Fill(bool on) { (void)on; }
+        void SetCursor(int x, int y) { (void)x; (void)y; }
+        void WriteString(const char* str, int font, bool on) { (void)str; (void)font; (void)on; }
+        void Update() {}
+    } display;
+
+    void DisplayControls(bool invert) { (void)invert; }
+
+    struct DacHandleLocal {
+        enum Channel { ONE = 0, TWO = 1, BOTH = 2 };
+        void WriteValue(Channel ch, uint16_t val) { (void)ch; (void)val; }
+    };
+
+    struct Seed {
+        DacHandleLocal dac;
+    } seed;
+
     void SetAudioBlockSize(int) {}
     float AudioSampleRate() const { return daisy_sample_rate; }
     void StartAdc() {}
@@ -108,24 +126,6 @@ extern "C" {
 
 inline float cvToFreq(float cv) {
     return 440.0f * powf(2.0f, cv - 0.75f);
-}
-
-enum Mapping { LINEAR, EXP, LOG };
-
-inline float fmap(float in, float mn, float mx, Mapping curve = LINEAR) {
-    switch (curve) {
-        case EXP: { float v = in * in; return mn + v * (mx - mn); }
-        case LOG: { float v = 1.0f - in; v = 1.0f - v * v; return mn + v * (mx - mn); }
-        default: return mn + in * (mx - mn);
-    }
-}
-
-inline float fclamp(float in, float mn, float mx) {
-    return fminf(fmaxf(in, mn), mx);
-}
-
-inline float mtof(float m) {
-    return powf(2.0f, (m - 69.0f) / 12.0f) * 440.0f;
 }
 
 struct dsy_gpio {
@@ -216,6 +216,351 @@ private:
 using daisy::patch_sm::DaisyPatchSM;
 `],
 
+// ─── daisy_seed.h — Daisy Seed browser stub ─────────────────────────
+['daisy_seed.h', `#pragma once
+#include <cstddef>
+#include <cstdint>
+#include <cmath>
+
+#define DSY_SDRAM_BSS
+
+namespace daisy {
+  namespace AudioHandle {
+    using InputBuffer = const float* const*;
+    using OutputBuffer = float**;
+  }
+}
+
+extern "C" {
+  extern float daisy_knob[8];
+  extern bool  daisy_gate[2];
+  extern bool  daisy_gate_out[2];
+  extern float daisy_sample_rate;
+  extern float daisy_pitch_cv;
+  extern float daisy_velocity;
+  extern float daisy_pitchbend;
+  extern float daisy_cv_in[4];
+  extern float daisy_cv_out[2];
+}
+
+inline float cvToFreq(float cv) {
+    return 440.0f * powf(2.0f, cv - 0.75f);
+}
+
+namespace daisy {
+
+struct DacHandle {
+    enum Channel { ONE = 0, TWO = 1, BOTH = 2 };
+    void WriteValue(Channel ch, uint16_t val) { (void)ch; (void)val; }
+};
+
+struct AdcChannelConfig {
+    void InitSingle(int pin) { (void)pin; }
+};
+
+struct AdcHandle {
+    void Init(AdcChannelConfig* cfg, int num) { (void)cfg; (void)num; }
+    void Start() {}
+    float GetFloat(int ch) const { return (ch >= 0 && ch < 8) ? daisy_knob[ch] : 0.f; }
+};
+
+class DaisySeed {
+public:
+    AdcHandle adc;
+    DacHandle dac;
+
+    void Init() {}
+    int GetPin(int pin) const { return pin; }
+    void SetAudioBlockSize(int) {}
+    float AudioSampleRate() const { return daisy_sample_rate; }
+    void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
+                              daisy::AudioHandle::OutputBuffer, size_t)) {}
+    void StartAudio(void (*)(float**, float**, size_t)) {}
+};
+
+} // namespace daisy
+
+using daisy::DaisySeed;
+`],
+
+// ─── daisy_pod.h — Daisy Pod browser stub ───────────────────────────
+['daisy_pod.h', `#pragma once
+#include <cstddef>
+#include <cstdint>
+#include <cmath>
+
+#define DSY_SDRAM_BSS
+
+namespace daisy {
+  namespace AudioHandle {
+    using InputBuffer = const float* const*;
+    using OutputBuffer = float**;
+  }
+}
+
+extern "C" {
+  extern float daisy_knob[8];
+  extern bool  daisy_gate[2];
+  extern bool  daisy_gate_out[2];
+  extern float daisy_sample_rate;
+  extern float daisy_pitch_cv;
+  extern float daisy_velocity;
+  extern float daisy_pitchbend;
+  extern float daisy_cv_in[4];
+  extern float daisy_cv_out[2];
+}
+
+inline float cvToFreq(float cv) {
+    return 440.0f * powf(2.0f, cv - 0.75f);
+}
+
+struct DaisyPod {
+    struct Knob {
+        float val = 0.5f;
+        void Process() {}
+        float Value() const { return val; }
+    } knob1, knob2;
+
+    struct Button {
+        bool pressed_ = false;
+        bool rising_ = false;
+        bool Pressed() const { return pressed_; }
+        bool RisingEdge() { bool r = rising_; rising_ = false; return r; }
+        bool FallingEdge() { return false; }
+    } button1, button2;
+
+    struct Encoder {
+        int inc_ = 0;
+        bool rising_ = false;
+        int Increment() { int i = inc_; inc_ = 0; return i; }
+        bool RisingEdge() { bool r = rising_; rising_ = false; return r; }
+        bool Pressed() const { return false; }
+    } encoder;
+
+    struct Led {
+        float r = 0.f, g = 0.f, b = 0.f;
+        void Set(float r_, float g_, float b_) { r = r_; g = g_; b = b_; }
+    } led1, led2;
+
+    void Init() {
+        knob1.val = daisy_knob[0];
+        knob2.val = daisy_knob[1];
+    }
+
+    void ProcessAllControls() {
+        knob1.val = daisy_knob[0];
+        knob2.val = daisy_knob[1];
+        knob1.Process();
+        knob2.Process();
+    }
+
+    void UpdateLeds() {}
+    void SetAudioBlockSize(int) {}
+    float AudioSampleRate() const { return daisy_sample_rate; }
+    void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
+                              daisy::AudioHandle::OutputBuffer, size_t)) {}
+    void StartAudio(void (*)(float**, float**, size_t)) {}
+};
+`],
+
+// ─── daisy_petal.h — Daisy Petal browser stub ───────────────────────
+['daisy_petal.h', `#pragma once
+#include <cstddef>
+#include <cstdint>
+#include <cmath>
+
+#define DSY_SDRAM_BSS
+
+namespace daisy {
+  namespace AudioHandle {
+    using InputBuffer = const float* const*;
+    using OutputBuffer = float**;
+  }
+}
+
+extern "C" {
+  extern float daisy_knob[8];
+  extern bool  daisy_gate[2];
+  extern bool  daisy_gate_out[2];
+  extern float daisy_sample_rate;
+  extern float daisy_pitch_cv;
+  extern float daisy_velocity;
+  extern float daisy_pitchbend;
+  extern float daisy_cv_in[4];
+  extern float daisy_cv_out[2];
+}
+
+inline float cvToFreq(float cv) {
+    return 440.0f * powf(2.0f, cv - 0.75f);
+}
+
+struct DaisyPetal {
+    struct Knob {
+        float val = 0.5f;
+        void Process() {}
+        float Value() const { return val; }
+    } knob[6];
+
+    struct Switch {
+        bool state_ = false;
+        bool rising_ = false;
+        bool Pressed() const { return state_; }
+        bool RisingEdge() { bool r = rising_; rising_ = false; return r; }
+        bool FallingEdge() { return false; }
+    } switches[4];
+
+    struct Encoder {
+        int inc_ = 0;
+        bool rising_ = false;
+        int Increment() { int i = inc_; inc_ = 0; return i; }
+        bool RisingEdge() { bool r = rising_; rising_ = false; return r; }
+        bool Pressed() const { return false; }
+    } encoder;
+
+    void Init() {
+        for (int i = 0; i < 6; i++) knob[i].val = (i < 8) ? daisy_knob[i] : 0.5f;
+    }
+
+    void ProcessAllControls() {
+        for (int i = 0; i < 6; i++) {
+            knob[i].val = (i < 8) ? daisy_knob[i] : 0.5f;
+            knob[i].Process();
+        }
+    }
+
+    void SetRingLed(int index, float r, float g, float b) {
+        (void)index; (void)r; (void)g; (void)b;
+    }
+
+    void SetFootswitchLed(int index, float brightness) {
+        (void)index; (void)brightness;
+    }
+
+    void UpdateLeds() {}
+    void SetAudioBlockSize(int) {}
+    float AudioSampleRate() const { return daisy_sample_rate; }
+    void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
+                              daisy::AudioHandle::OutputBuffer, size_t)) {}
+    void StartAudio(void (*)(float**, float**, size_t)) {}
+};
+`],
+
+// ─── daisy_field.h — Daisy Field browser stub ───────────────────────
+['daisy_field.h', `#pragma once
+#include <cstddef>
+#include <cstdint>
+#include <cmath>
+
+#define DSY_SDRAM_BSS
+
+namespace daisy {
+  namespace AudioHandle {
+    using InputBuffer = const float* const*;
+    using OutputBuffer = float**;
+  }
+}
+
+extern "C" {
+  extern float daisy_knob[8];
+  extern bool  daisy_gate[2];
+  extern bool  daisy_gate_out[2];
+  extern float daisy_sample_rate;
+  extern float daisy_pitch_cv;
+  extern float daisy_velocity;
+  extern float daisy_pitchbend;
+  extern float daisy_cv_in[4];
+  extern float daisy_cv_out[2];
+}
+
+inline float cvToFreq(float cv) {
+    return 440.0f * powf(2.0f, cv - 0.75f);
+}
+
+// Font stub
+struct FontDef {
+    int width;
+    int height;
+};
+static const FontDef Font_7x10 = {7, 10};
+static const FontDef Font_6x8 = {6, 8};
+static const FontDef Font_11x18 = {11, 18};
+static const FontDef Font_16x26 = {16, 26};
+
+namespace daisy {
+
+struct DacHandle {
+    enum Channel { ONE = 0, TWO = 1, BOTH = 2 };
+    void WriteValue(Channel ch, uint16_t val) { (void)ch; (void)val; }
+};
+
+} // namespace daisy
+
+struct DaisyField {
+    struct Knob {
+        float val = 0.5f;
+        void Process() {}
+        float Value() const { return val; }
+    } knob[8];
+
+    struct Display {
+        void Fill(bool on) { (void)on; }
+        void SetCursor(int x, int y) { (void)x; (void)y; }
+        void WriteString(const char* str, FontDef font, bool on) {
+            (void)str; (void)font; (void)on;
+        }
+        void Update() {}
+        void DrawLine(int x0, int y0, int x1, int y1, bool on) {
+            (void)x0; (void)y0; (void)x1; (void)y1; (void)on;
+        }
+        void DrawRect(int x0, int y0, int x1, int y1, bool on, bool fill = false) {
+            (void)x0; (void)y0; (void)x1; (void)y1; (void)on; (void)fill;
+        }
+    } display;
+
+    struct LedDriver {
+        void SetLed(int index, float brightness) { (void)index; (void)brightness; }
+    } led_driver;
+
+    struct Seed {
+        daisy::DacHandle dac;
+    } seed;
+
+    bool keyboard_state_[16] = {};
+    bool keyboard_rising_[16] = {};
+    bool keyboard_falling_[16] = {};
+
+    void Init() {
+        for (int i = 0; i < 8; i++) knob[i].val = daisy_knob[i];
+    }
+
+    void ProcessAllControls() {
+        for (int i = 0; i < 8; i++) {
+            knob[i].val = daisy_knob[i];
+            knob[i].Process();
+        }
+    }
+
+    bool KeyboardState(int key) const {
+        return (key >= 0 && key < 16) ? keyboard_state_[key] : false;
+    }
+    bool KeyboardRisingEdge(int key) {
+        if (key >= 0 && key < 16) { bool r = keyboard_rising_[key]; keyboard_rising_[key] = false; return r; }
+        return false;
+    }
+    bool KeyboardFallingEdge(int key) {
+        if (key >= 0 && key < 16) { bool f = keyboard_falling_[key]; keyboard_falling_[key] = false; return f; }
+        return false;
+    }
+
+    void UpdateLeds() {}
+    void SetAudioBlockSize(int) {}
+    float AudioSampleRate() const { return daisy_sample_rate; }
+    void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
+                              daisy::AudioHandle::OutputBuffer, size_t)) {}
+    void StartAudio(void (*)(float**, float**, size_t)) {}
+};
+`],
+
 // ─── daisysp.h — Top-level include ─────────────────────────────────
 ['daisysp.h', `#pragma once
 #include "Utility/dsp.h"
@@ -254,6 +599,7 @@ using daisy::patch_sm::DaisyPatchSM;
 #include "Effects/wavefolder.h"
 #include "Effects/tremolo.h"
 #include "Effects/pitchshifter.h"
+#include "Effects/reverbsc.h"
 #include "Effects/autowah.h"
 #include "Effects/chorus.h"
 #include "Effects/flanger.h"
@@ -1612,6 +1958,65 @@ class PitchShifter {
     float    buf_[SHIFT_BUFFER_SIZE];
     uint32_t write_pos_, del_size_;
     float    read_phase1_, read_phase2_;
+};
+
+} // namespace daisysp
+`],
+
+// ─── Effects/reverbsc.h — Stereo FDN reverb ─────────────────────────
+['Effects/reverbsc.h', `#pragma once
+#include <cmath>
+#include <cstddef>
+#include "Utility/dsp.h"
+
+namespace daisysp {
+
+class ReverbSc {
+  public:
+    void Init(float sr) {
+        sr_ = sr;
+        feedback_ = 0.85f;
+        lpfreq_ = 10000.0f;
+        lp1_ = 0.0f;
+        lp2_ = 0.0f;
+        for (size_t i = 0; i < kBufSize; i++) { buf1_[i] = 0.f; buf2_[i] = 0.f; }
+        write1_ = 0; write2_ = 0;
+    }
+
+    void SetFeedback(float fb) { feedback_ = fclamp(fb, 0.0f, 1.0f); }
+    void SetLpFreq(float f) { lpfreq_ = f; }
+
+    int Process(float in1, float in2, float* out1, float* out2) {
+        float coeff = 2.0f - cosf(TWOPI_F * lpfreq_ / sr_);
+        coeff = coeff - sqrtf(coeff * coeff - 1.0f);
+
+        // First delay line
+        size_t d1 = 1117;
+        size_t r1 = (write1_ + kBufSize - d1) % kBufSize;
+        float rd1 = buf1_[r1];
+        lp1_ += coeff * (rd1 - lp1_);
+        buf1_[write1_] = in1 + lp1_ * feedback_;
+        write1_ = (write1_ + 1) % kBufSize;
+
+        // Second delay line
+        size_t d2 = 1491;
+        size_t r2 = (write2_ + kBufSize - d2) % kBufSize;
+        float rd2 = buf2_[r2];
+        lp2_ += coeff * (rd2 - lp2_);
+        buf2_[write2_] = in2 + lp2_ * feedback_;
+        write2_ = (write2_ + 1) % kBufSize;
+
+        *out1 = lp1_;
+        *out2 = lp2_;
+        return 0;
+    }
+
+  private:
+    static constexpr size_t kBufSize = 4096;
+    float sr_, feedback_, lpfreq_;
+    float lp1_, lp2_;
+    float buf1_[kBufSize], buf2_[kBufSize];
+    size_t write1_, write2_;
 };
 
 } // namespace daisysp
