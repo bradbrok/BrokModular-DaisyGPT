@@ -1,10 +1,10 @@
 // Minimal QSPI Programmer for Daisy
-// Runs from internal flash (0x08000000). On boot, writes the embedded
-// firmware to QSPI flash, then jumps to the QSPI application.
+// Runs from internal flash (0x08000000). Writes embedded firmware
+// to QSPI flash at 0x90040000, then jumps to it.
 //
-// Uses System + QSPIHandle directly (not DaisySeed) to minimize code size.
+// Skips System::Init() (PLL, MPU, cache, timer) to minimize code size.
+// Runs at default HSI 64 MHz — enough for QSPI operations.
 
-#include "sys/system.h"
 #include "per/qspi.h"
 #include "daisy_core.h"
 #include "stm32h7xx_hal.h"
@@ -12,7 +12,6 @@
 
 using namespace daisy;
 
-static System sys;
 static QSPIHandle qspi;
 
 static constexpr uint32_t QSPI_APP_OFFSET = 0x40000;
@@ -20,34 +19,25 @@ static constexpr uint32_t QSPI_APP_ADDR   = 0x90040000;
 
 static void JumpToApplication()
 {
-    volatile uint32_t* vectors = (volatile uint32_t*)QSPI_APP_ADDR;
-
+    volatile uint32_t* v = (volatile uint32_t*)QSPI_APP_ADDR;
     __disable_irq();
-
     SysTick->CTRL = 0;
-    SysTick->LOAD = 0;
-    SysTick->VAL  = 0;
-
     for(uint32_t i = 0; i < 8; i++)
     {
         NVIC->ICER[i] = 0xFFFFFFFF;
         NVIC->ICPR[i] = 0xFFFFFFFF;
     }
-
     SCB->VTOR = QSPI_APP_ADDR;
-    __set_MSP(vectors[0]);
+    __set_MSP(v[0]);
     __enable_irq();
-
-    void (*entry)(void) = (void (*)(void))vectors[1];
-    entry();
+    ((void (*)(void))v[1])();
 }
 
 int main(void)
 {
-    // Minimal init: clocks, MPU, caches — no USB/ADC/DAC/audio
-    sys.Init();
+    HAL_Init();
 
-    // Configure QSPI for IS25LP064A on Daisy hardware pins
+    // Init QSPI in memory-mapped mode for fingerprint check
     QSPIHandle::Config qcfg;
     qcfg.device = QSPIHandle::Config::IS25LP064A;
     qcfg.mode   = QSPIHandle::Config::MEMORY_MAPPED;
@@ -59,11 +49,10 @@ int main(void)
     qcfg.pin_config.ncs = dsy_pin(DSY_GPIOG, 6);
     qspi.Init(qcfg);
 
-    // Fingerprint check: compare first bytes to avoid unnecessary re-flash
+    // Fingerprint: compare first bytes to skip unnecessary re-flash
     volatile uint8_t* mapped = (volatile uint8_t*)QSPI_APP_ADDR;
     bool needs_update = false;
-    uint32_t check_len = app_firmware_size < 512 ? app_firmware_size : 512;
-
+    uint32_t check_len = app_firmware_size < 256 ? app_firmware_size : 256;
     for(uint32_t i = 0; i < check_len; i++)
     {
         if(mapped[i] != app_firmware[i])
@@ -75,22 +64,18 @@ int main(void)
 
     if(needs_update)
     {
-        // Erase QSPI sectors covering the firmware
         uint32_t erase_end = QSPI_APP_OFFSET + app_firmware_size;
         erase_end = (erase_end + 0xFFFF) & ~0xFFFF;
         qspi.Erase(QSPI_APP_OFFSET, erase_end);
-
-        // Write firmware to QSPI
         qspi.Write(QSPI_APP_OFFSET, app_firmware_size,
                     const_cast<uint8_t*>(app_firmware));
 
-        // System reset so QSPI re-inits in memory-mapped mode cleanly
-        System::Delay(50);
+        // Reset so QSPI re-inits in memory-mapped mode
+        HAL_Delay(50);
         NVIC_SystemReset();
         while(1) {}
     }
 
-    // QSPI has correct firmware and is memory-mapped — jump
     JumpToApplication();
     while(1) {}
 }
