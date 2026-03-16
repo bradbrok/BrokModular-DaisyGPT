@@ -1739,7 +1739,7 @@ async function startAudio() {
       if (e.data.type === 'rms') {
         state.rmsLevel = e.data.level;
       } else if (e.data.type === 'ready') {
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < state.knobs.length; i++) {
           state.workletNode.port.postMessage({ type: 'set-knob', index: i, value: state.knobs[i] });
         }
       } else if (e.data.type === 'sample-position') {

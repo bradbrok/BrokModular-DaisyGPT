@@ -1053,11 +1053,8 @@ public:
     dsy_gpio user_led;
 
     void Init() {
-        for (int i = 0; i < 8; i++) {
-            if (i < 4) controls_[i] = daisy_knob[i];
-            else controls_[i] = 0.5f;
-        }
-        for (int i = 8; i < 12; i++) controls_[i] = 0.f;
+        for (int i = 0; i < 8; i++) controls_[i] = daisy_knob[i];
+        for (int i = 0; i < 4; i++) controls_[i + 8] = daisy_cv_in[i];
         gate_in_1.trig = daisy_gate[0];
         gate_in_2.trig = daisy_gate[1];
     }
@@ -1068,8 +1065,8 @@ public:
     }
 
     void ProcessAnalogControls() {
-        for (int i = 0; i < 4; i++) controls_[i] = daisy_knob[i];
-        for (int i = 0; i < 4; i++) controls_[i + 4] = daisy_cv_in[i];
+        for (int i = 0; i < 8; i++) controls_[i] = daisy_knob[i];
+        for (int i = 0; i < 4; i++) controls_[i + 8] = daisy_cv_in[i];
     }
 
     void ProcessDigitalControls() {

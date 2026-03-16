@@ -93,18 +93,52 @@ export class DaisyDFU {
       await this.device.selectConfiguration(1);
     }
 
+    // Collect all DFU alternate settings so we can pick the right one for the target memory
+    this.alternates = [];
     for (const iface of this.device.configuration.interfaces) {
       for (const alt of iface.alternates) {
         // DFU class = 0xFE, subclass = 0x01
         if (alt.interfaceClass === 0xFE && alt.interfaceSubclass === 0x01) {
           this.interfaceNumber = iface.interfaceNumber;
-          break;
+          this.alternates.push({
+            interfaceNumber: iface.interfaceNumber,
+            alternateSetting: alt.alternateSetting,
+            name: alt.interfaceName || '',
+          });
         }
       }
     }
 
     await this.device.claimInterface(this.interfaceNumber);
     this.log(`Claimed interface ${this.interfaceNumber}`);
+  }
+
+  async selectAlternateForAddress(address) {
+    // STM32 DFU bootloader exposes different alt settings for different memories.
+    // Try to match by interface name string (e.g., contains "External" or the address).
+    // Fallback: alt 0 = internal flash, alt 1 = external QSPI flash.
+    const isQSPI = address >= QSPI_BASE;
+
+    for (const alt of this.alternates) {
+      const name = alt.name.toLowerCase();
+      if (isQSPI && (name.includes('external') || name.includes('qspi') || name.includes('0x90'))) {
+        await this.device.selectAlternateInterface(this.interfaceNumber, alt.alternateSetting);
+        this.log(`Selected alternate ${alt.alternateSetting}: ${alt.name}`);
+        return;
+      }
+      if (!isQSPI && (name.includes('internal') || name.includes('0x08'))) {
+        await this.device.selectAlternateInterface(this.interfaceNumber, alt.alternateSetting);
+        this.log(`Selected alternate ${alt.alternateSetting}: ${alt.name}`);
+        return;
+      }
+    }
+
+    // Fallback: alt 0 = internal, alt 1 = external
+    const fallbackAlt = isQSPI ? 1 : 0;
+    if (this.alternates.length > fallbackAlt) {
+      await this.device.selectAlternateInterface(this.interfaceNumber, this.alternates[fallbackAlt].alternateSetting);
+      this.log(`Selected alternate ${fallbackAlt} (fallback for ${isQSPI ? 'QSPI' : 'internal'} flash)`);
+    }
   }
 
   async getStatus() {
@@ -172,27 +206,60 @@ export class DaisyDFU {
     await this.waitForState(DFU_STATE.dfuDNLOAD_IDLE);
   }
 
-  async eraseSector(address) {
-    const data = new Uint8Array(5);
-    data[0] = ERASE_PAGE;
-    data[1] = address & 0xFF;
-    data[2] = (address >> 8) & 0xFF;
-    data[3] = (address >> 16) & 0xFF;
-    data[4] = (address >> 24) & 0xFF;
+  async eraseSector(address, retries = 3) {
+    for (let attempt = 0; attempt < retries; attempt++) {
+      const data = new Uint8Array(5);
+      data[0] = ERASE_PAGE;
+      data[1] = address & 0xFF;
+      data[2] = (address >> 8) & 0xFF;
+      data[3] = (address >> 16) & 0xFF;
+      data[4] = (address >> 24) & 0xFF;
 
-    await this.download(0, data);
+      await this.download(0, data);
 
-    // Erase can take a while
-    let status;
-    for (let i = 0; i < 100; i++) {
-      status = await this.getStatus();
-      if (status.state === DFU_STATE.dfuDNLOAD_IDLE) break;
-      if (status.state === DFU_STATE.dfuERROR) {
-        await this.clearStatus();
-        throw new Error(`Erase error at 0x${address.toString(16)}`);
+      // QSPI erase can take significantly longer than internal flash
+      const isQSPI = address >= QSPI_BASE;
+      const maxPolls = isQSPI ? 200 : 100;
+      const minDelay = isQSPI ? 200 : 100;
+
+      let status;
+      let success = false;
+      for (let i = 0; i < maxPolls; i++) {
+        status = await this.getStatus();
+        if (status.state === DFU_STATE.dfuDNLOAD_IDLE) {
+          success = true;
+          break;
+        }
+        if (status.state === DFU_STATE.dfuERROR) {
+          await this.clearStatus();
+          break;
+        }
+        await this._sleep(Math.max(status.pollTimeout, minDelay));
       }
-      await this._sleep(Math.max(status.pollTimeout, 100));
+
+      if (success) return;
+
+      if (attempt < retries - 1) {
+        this.log(`Erase failed at 0x${address.toString(16)}, retrying (${attempt + 1}/${retries})...`);
+        // Reset to idle state before retry
+        try {
+          await this.device.controlTransferOut({
+            requestType: 'class',
+            recipient: 'interface',
+            request: DFU_ABORT,
+            value: 0,
+            index: this.interfaceNumber,
+          });
+          await this._sleep(500);
+          const st = await this.getStatus();
+          if (st.state === DFU_STATE.dfuERROR) await this.clearStatus();
+        } catch (e) {
+          // ignore recovery errors
+        }
+      }
     }
+
+    throw new Error(`Erase error at 0x${address.toString(16)} after ${retries} attempts`);
   }
 
   async massErase() {
@@ -241,8 +308,13 @@ export class DaisyDFU {
       await this.waitForState(DFU_STATE.dfuIDLE);
     }
 
+    // Select the correct alternate interface for the target memory region
+    await this.selectAlternateForAddress(baseAddress);
+
     // Erase sectors that will be written
-    const sectorSize = 0x20000; // 128KB sectors for STM32H750
+    // Internal flash: 128KB sectors (0x20000), QSPI flash: 64KB sectors (0x10000)
+    const isQSPI = baseAddress >= QSPI_BASE;
+    const sectorSize = isQSPI ? 0x10000 : 0x20000;
     const startSector = baseAddress;
     const endSector = baseAddress + totalBytes;
     for (let addr = startSector; addr < endSector; addr += sectorSize) {
