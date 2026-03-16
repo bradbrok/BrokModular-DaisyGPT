@@ -150,12 +150,18 @@ export class DaisyDFU {
       index: this.interfaceNumber,
     }, 6);
 
-    const data = new DataView(result.data.buffer);
+    if (result.status !== 'ok') {
+      throw new Error(`GET_STATUS transfer failed: ${result.status}`);
+    }
+
+    // Use result.data directly — creating new DataView(result.data.buffer)
+    // can read from wrong offset if browser uses shared backing buffer
+    const d = result.data;
     return {
-      status: data.getUint8(0),
-      pollTimeout: data.getUint8(1) | (data.getUint8(2) << 8) | (data.getUint8(3) << 16),
-      state: data.getUint8(4),
-      string: data.getUint8(5),
+      status: d.getUint8(0),
+      pollTimeout: d.getUint8(1) | (d.getUint8(2) << 8) | (d.getUint8(3) << 16),
+      state: d.getUint8(4),
+      string: d.getUint8(5),
     };
   }
 
@@ -291,13 +297,8 @@ export class DaisyDFU {
 
     this.log(`Flashing ${totalBytes} bytes to 0x${baseAddress.toString(16)}...`);
 
-    // Ensure we're in dfuIDLE
-    let status = await this.getStatus();
-    if (status.state === DFU_STATE.dfuERROR) {
-      await this.clearStatus();
-      status = await this.getStatus();
-    }
-    if (status.state !== DFU_STATE.dfuIDLE) {
+    // Force device to a known state: abort any pending operation, clear errors
+    try {
       await this.device.controlTransferOut({
         requestType: 'class',
         recipient: 'interface',
@@ -305,14 +306,31 @@ export class DaisyDFU {
         value: 0,
         index: this.interfaceNumber,
       });
+    } catch (e) { /* ignore */ }
+    await this._sleep(100);
+
+    // Clear any error state and get to dfuIDLE
+    let status;
+    for (let i = 0; i < 5; i++) {
       status = await this.getStatus();
+      this.log(`DFU state: ${status.state}, status: ${status.status}`);
+      if (status.state === DFU_STATE.dfuIDLE) break;
       if (status.state === DFU_STATE.dfuERROR) {
         await this.clearStatus();
-        status = await this.getStatus();
+        continue;
       }
-      if (status.state !== DFU_STATE.dfuIDLE) {
-        throw new Error(`Cannot reach dfuIDLE (stuck in state ${status.state})`);
-      }
+      // For any other state, try abort
+      await this.device.controlTransferOut({
+        requestType: 'class',
+        recipient: 'interface',
+        request: DFU_ABORT,
+        value: 0,
+        index: this.interfaceNumber,
+      });
+      await this._sleep(100);
+    }
+    if (!status || status.state !== DFU_STATE.dfuIDLE) {
+      throw new Error(`Cannot reach dfuIDLE (state ${status ? status.state : 'unknown'})`);
     }
 
     // Erase sectors that will be written
