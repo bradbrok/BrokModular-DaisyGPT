@@ -9,7 +9,9 @@ export const BOARDS = {
     header: 'daisy_seed.h',
     description: 'Raw Daisy Seed module — maximum flexibility, define your own I/O',
     knobs: 0,
+    cvInputs: 0,
     gates: 0,
+    gateOutputs: 0,
     cvOutputs: 0,
     hasOLED: false,
     hasMidi: true,
@@ -63,9 +65,11 @@ int main(void) {
     name: 'Daisy Patch',
     className: 'DaisyPatch',
     header: 'daisy_patch.h',
-    description: '4 knobs, 2 gate inputs, 4 CV inputs, OLED display, 4-channel audio',
+    description: '4 knobs, 2 gate inputs, 1 gate output, 4 CV inputs, 2 CV outputs, OLED, 4-ch audio',
     knobs: 4,
+    cvInputs: 4,
     gates: 2,
+    gateOutputs: 1,
     cvOutputs: 2,
     hasOLED: true,
     hasMidi: true,
@@ -78,15 +82,19 @@ Hardware:
 - Init: \`patch.Init();\` then \`patch.StartAudio(AudioCallback);\`
 - Audio callback: \`void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size)\`
 - 4 knobs: \`patch.GetKnobValue(DaisyPatch::CTRL_1)\` through CTRL_4 (returns 0.0-1.0)
-- 2 gate inputs: \`patch.gate_input[0].Trig()\` and \`patch.gate_input[1].Trig()\`
-- 4 CV inputs on the audio jacks
-- 2 CV outputs: \`patch.seed.dac.WriteValue(DacHandle::Channel::ONE, value)\`
+- 2 gate inputs: \`patch.gate_input[0].Trig()\` (rising edge) / \`patch.gate_input[0].State()\` (level)
+- 1 gate output: directly via GPIO
+- 4 CV inputs on the audio jacks (read as audio channels in[0]..in[3])
+- 2 CV outputs (12-bit DAC): \`patch.seed.dac.WriteValue(DacHandle::Channel::ONE, value);\` (0-4095 raw, or use voltage conversion)
 - 128x64 OLED: \`patch.display.Fill(false); patch.display.SetCursor(0,0); patch.display.WriteString("text", Font_7x10, true); patch.display.Update();\`
+- Quad audio I/O (4 in, 4 out) — use all 4 output channels for polyphonic or multi-bus designs
+- Call \`patch.ProcessAllControls();\` at the start of AudioCallback
 
 CRITICAL — KNOB LABELS: Add a short \`// Label\` comment at the end of EVERY line that reads CTRL_N:
 \`float freq = fmap(patch.GetKnobValue(DaisyPatch::CTRL_1), 20.f, 2000.f, Mapping::LOG); // Frequency\`
 
-Use \`fmap()\` for knob scaling (with Mapping::LOG for frequency-like params).`,
+Use \`fmap()\` for knob scaling (with Mapping::LOG for frequency-like params).
+Use all available I/O: leverage CV inputs for modulation, CV outputs for envelopes/LFOs, and gate I/O for sequencing.`,
     template: `#include "daisy_patch.h"
 #include "daisysp.h"
 
@@ -130,7 +138,9 @@ int main(void) {
     header: 'daisy_pod.h',
     description: '2 knobs, 2 buttons, 2 RGB LEDs, stereo audio',
     knobs: 2,
+    cvInputs: 0,
     gates: 0,
+    gateOutputs: 0,
     cvOutputs: 0,
     hasOLED: false,
     hasMidi: true,
@@ -190,7 +200,9 @@ int main(void) {
     header: 'daisy_petal.h',
     description: '6 knobs, 4 switches, 8 RGB LEDs, encoder, stereo guitar pedal',
     knobs: 6,
+    cvInputs: 0,
     gates: 0,
+    gateOutputs: 0,
     cvOutputs: 0,
     hasOLED: false,
     hasMidi: true,
@@ -257,14 +269,110 @@ int main(void) {
 `,
   },
 
+  patch_sm: {
+    id: 'patch_sm',
+    name: 'Patch Submodule (Patch SM)',
+    className: 'DaisyPatchSM',
+    header: 'daisy_patch_sm.h',
+    description: '12 CV/pot inputs, 2 CV outputs, 2 gate in, 2 gate out, stereo audio, 12 GPIO',
+    knobs: 8,
+    cvInputs: 4,
+    gates: 2,
+    gateOutputs: 2,
+    cvOutputs: 2,
+    hasOLED: false,
+    hasMidi: true,
+    audioChannels: { in: 2, out: 2 },
+    gpioCount: 12,
+    knobNames: ['CV_1', 'CV_2', 'CV_3', 'CV_4', 'CV_5', 'CV_6', 'CV_7', 'CV_8'],
+    promptFragment: `You are programming a Daisy Patch Submodule (Patch SM) — a powerful Eurorack DSP platform.
+
+Hardware:
+- Global object: \`DaisyPatchSM patch_sm;\` (in namespace \`daisy::patch_sm\`)
+- Init: \`patch_sm.Init();\` then \`patch_sm.StartAudio(AudioCallback);\`
+- Audio callback: \`void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size)\`
+- 12 ADC inputs (16-bit, bipolar CV or potentiometer):
+  - Access via \`patch_sm.GetAdcValue(CV_1)\` through CV_8 for first 8 (returns 0.0-1.0)
+  - Additional ADC channels: C5, C3, C4, C2, C6, C7, C8, C9
+  - Call \`patch_sm.ProcessAllControls();\` at the start of each AudioCallback
+- 2 CV outputs (12-bit DAC, 0-5V):
+  - \`patch_sm.WriteCvOut(CV_OUT_1, voltage);\` and \`patch_sm.WriteCvOut(CV_OUT_2, voltage);\`
+  - Voltage range: 0.0 to 5.0
+- 2 gate inputs:
+  - \`patch_sm.gate_in_1.State()\` — returns true/false
+  - \`patch_sm.gate_in_2.State()\` — returns true/false
+  - \`patch_sm.gate_in_1.Trig()\` — returns true on rising edge
+- 2 gate outputs:
+  - \`dsy_gpio_write(&patch_sm.gate_out_1, true/false);\`
+  - \`dsy_gpio_write(&patch_sm.gate_out_2, true/false);\`
+- Stereo audio I/O (2-in, 2-out) at up to 96kHz / 24-bit
+- No built-in OLED — user may add external display
+- User LED: \`patch_sm.SetLed(true/false);\`
+- 12 GPIO pins available for buttons, encoders, LEDs, etc.
+
+When generating code:
+1. Include "daisy_patch_sm.h" and "daisysp.h"
+2. Use \`using namespace daisy; using namespace patch_sm; using namespace daisysp;\`
+3. Declare \`DaisyPatchSM patch_sm;\` as global
+4. Use \`patch_sm.ProcessAllControls();\` at the start of AudioCallback
+5. Use all available CV inputs for rich parameter control
+
+CRITICAL — KNOB LABELS: Add a short \`// Label\` comment at the end of EVERY line that reads a CV input:
+\`float freq = fmap(patch_sm.GetAdcValue(CV_1), 20.f, 2000.f, Mapping::LOG); // Frequency\`
+
+Use \`fmap()\` for knob/CV scaling (with Mapping::LOG for frequency-like params).`,
+    template: `#include "daisy_patch_sm.h"
+#include "daisysp.h"
+
+using namespace daisy;
+using namespace patch_sm;
+using namespace daisysp;
+
+DaisyPatchSM patch_sm;
+Oscillator osc;
+
+void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
+    patch_sm.ProcessAllControls();
+    float freq = fmap(patch_sm.GetAdcValue(CV_1), 20.f, 2000.f, Mapping::LOG); // Frequency
+    float amp = patch_sm.GetAdcValue(CV_2); // Volume
+    float detune = fmap(patch_sm.GetAdcValue(CV_3), 0.f, 0.05f); // Detune
+    float filter_freq = fmap(patch_sm.GetAdcValue(CV_4), 200.f, 18000.f, Mapping::LOG); // Filter
+    osc.SetFreq(freq);
+    osc.SetAmp(amp);
+    // Gate input trigger
+    bool gate = patch_sm.gate_in_1.Trig();
+    for (size_t i = 0; i < size; i++) {
+        float sig = osc.Process();
+        out[0][i] = sig;
+        out[1][i] = sig;
+    }
+    // Mirror gate input to gate output
+    dsy_gpio_write(&patch_sm.gate_out_1, patch_sm.gate_in_1.State());
+    // CV output: frequency as voltage
+    patch_sm.WriteCvOut(CV_OUT_1, freq / 2000.f * 5.f);
+}
+
+int main(void) {
+    patch_sm.Init();
+    osc.Init(patch_sm.AudioSampleRate());
+    osc.SetWaveform(Oscillator::WAVE_SAW);
+    patch_sm.StartDac();
+    patch_sm.StartAudio(AudioCallback);
+    while(1) {}
+}
+`,
+  },
+
   field: {
     id: 'field',
     name: 'Daisy Field',
     className: 'DaisyField',
     header: 'daisy_field.h',
-    description: '8 knobs, 2 CV inputs, OLED, 16-key keyboard, 8 LED sliders',
+    description: '8 knobs, 2 CV inputs, 2 CV outputs, OLED, 16-key keyboard, 8 LED sliders',
     knobs: 8,
+    cvInputs: 2,
     gates: 0,
+    gateOutputs: 0,
     cvOutputs: 2,
     hasOLED: true,
     hasMidi: true,
@@ -369,4 +477,22 @@ export function getBoardTemplate(boardId) {
 export function getBoardKnobCount(boardId) {
   const board = BOARDS[boardId];
   return board ? board.knobs : 4;
+}
+
+/**
+ * Get board IO summary for display in the device wizard.
+ */
+export function getBoardIOSummary(boardId) {
+  const board = BOARDS[boardId];
+  if (!board) return '';
+  const parts = [];
+  if (board.knobs) parts.push(`${board.knobs} knobs/pots`);
+  if (board.cvInputs) parts.push(`${board.cvInputs} CV inputs`);
+  if (board.gates) parts.push(`${board.gates} gate inputs`);
+  if (board.gateOutputs) parts.push(`${board.gateOutputs} gate outputs`);
+  if (board.cvOutputs) parts.push(`${board.cvOutputs} CV outputs`);
+  if (board.hasOLED) parts.push('OLED display');
+  if (board.hasMidi) parts.push('MIDI');
+  parts.push(`${board.audioChannels.in}-in/${board.audioChannels.out}-out audio`);
+  return parts.join(' · ');
 }

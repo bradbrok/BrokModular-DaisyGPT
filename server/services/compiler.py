@@ -43,10 +43,11 @@ def compile_code(files, target='flash', board='patch'):
         # Copy Makefile template
         shutil.copy(os.path.join(TEMPLATE_DIR, 'Makefile'), tmpdir)
 
-        # Set boot target via environment
+        # Set boot target and board via environment
         env = os.environ.copy()
         env['LIBDAISY_DIR'] = LIBDAISY_DIR
         env['DAISYSP_DIR'] = DAISYSP_DIR
+        env['TARGET'] = board if board else 'patch'
         if target == 'qspi':
             env['BOOT_TARGET'] = 'qspi'
 
@@ -68,7 +69,8 @@ def compile_code(files, target='flash', board='patch'):
             raise RuntimeError(f'compilation_failed|||{result.stderr}')
 
         # Read the output binary
-        bin_path = os.path.join(tmpdir, 'build', 'patch.bin')
+        bin_name = (board if board else 'patch') + '.bin'
+        bin_path = os.path.join(tmpdir, 'build', bin_name)
         if not os.path.exists(bin_path):
             raise RuntimeError(f'compilation_failed|||Binary not found at {bin_path}')
 

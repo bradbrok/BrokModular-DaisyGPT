@@ -19,13 +19,15 @@ namespace daisy {
 
 // Global knob/gate state written by JS glue code
 extern "C" {
-    extern float daisy_knob[4];       // 0.0 - 1.0
-    extern bool  daisy_gate[2];       // trigger state
+    extern float daisy_knob[8];       // 0.0 - 1.0 (up to 8 for Patch SM / Field)
+    extern bool  daisy_gate[2];       // gate input state
+    extern bool  daisy_gate_out[2];   // gate output state
     extern float daisy_sample_rate;   // default 48000
     extern float daisy_pitch_cv;      // 1V/Oct: (note-60)/12, C4=0.0
     extern float daisy_velocity;      // 0.0-1.0
     extern float daisy_pitchbend;     // -1.0 to 1.0
     extern float daisy_cv_in[4];      // CV inputs (general purpose)
+    extern float daisy_cv_out[2];     // CV outputs (DAC)
 }
 
 // Convert 1V/Oct CV to frequency (C4=0.0 → 261.63Hz, A4=0.75 → 440Hz)
@@ -999,6 +1001,105 @@ public:
 
 } // namespace daisysp
 
+// Forward declaration for GPIO write
+struct dsy_gpio {
+    bool state = false;
+};
+inline void dsy_gpio_write(dsy_gpio* gpio, bool val) { gpio->state = val; }
+
+// ─── DaisyPatchSM stub ──────────────────────────────────────────
+// Patch Submodule: 12 ADC, 2 CV out, 2 gate in, 2 gate out, stereo audio, 12 GPIO
+namespace daisy {
+namespace patch_sm {
+
+// CV input channel enums (matching libDaisy's DaisyPatchSM)
+enum {
+    CV_1 = 0, CV_2, CV_3, CV_4,
+    CV_5, CV_6, CV_7, CV_8,
+    ADC_9, ADC_10, ADC_11, ADC_12,
+    ADC_LAST
+};
+
+// CV output channel enums
+enum {
+    CV_OUT_1 = 1,
+    CV_OUT_2 = 2,
+    CV_OUT_BOTH = 0
+};
+
+struct GateIn {
+    bool trig = false;
+    bool Trig() { bool t = trig; trig = false; return t; }
+    bool State() const { return trig; }
+};
+
+class DaisyPatchSM {
+public:
+    GateIn gate_in_1;
+    GateIn gate_in_2;
+    dsy_gpio gate_out_1;
+    dsy_gpio gate_out_2;
+    dsy_gpio user_led;
+
+    void Init() {
+        for (int i = 0; i < 8; i++) {
+            if (i < 4) controls_[i] = daisy_knob[i];
+            else controls_[i] = 0.5f;
+        }
+        for (int i = 8; i < 12; i++) controls_[i] = 0.f;
+        gate_in_1.trig = daisy_gate[0];
+        gate_in_2.trig = daisy_gate[1];
+    }
+
+    void ProcessAllControls() {
+        ProcessAnalogControls();
+        ProcessDigitalControls();
+    }
+
+    void ProcessAnalogControls() {
+        for (int i = 0; i < 4; i++) controls_[i] = daisy_knob[i];
+        for (int i = 0; i < 4; i++) controls_[i + 4] = daisy_cv_in[i];
+    }
+
+    void ProcessDigitalControls() {
+        gate_in_1.trig = daisy_gate[0];
+        gate_in_2.trig = daisy_gate[1];
+    }
+
+    float GetAdcValue(int idx) const {
+        if (idx >= 0 && idx < 12) return controls_[idx];
+        return 0.f;
+    }
+
+    void StartAdc() {}
+    void StopAdc() {}
+    void StartDac(void* cb = nullptr) { (void)cb; }
+    void StopDac() {}
+
+    void WriteCvOut(int channel, float voltage) {
+        (void)channel; (void)voltage; // No-op in browser
+    }
+
+    void SetLed(bool state) { user_led.state = state; }
+
+    void SetAudioBlockSize(int) {}
+    float AudioSampleRate() const { return daisy_sample_rate; }
+    float AudioCallbackRate() const { return daisy_sample_rate / 48.f; }
+    void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
+                              daisy::AudioHandle::OutputBuffer, size_t)) {}
+    void StartAudio(void (*)(float**, float**, size_t)) {}
+
+private:
+    float controls_[12] = {};
+};
+
+} // namespace patch_sm
+} // namespace daisy
+
+// Bring patch_sm types into scope for user code
+using daisy::patch_sm::DaisyPatchSM;
+using daisy::patch_sm::GateIn;
+
 // DaisyPatch stub
 struct DaisyPatch {
     static constexpr int CTRL_1 = 0;
@@ -1029,7 +1130,7 @@ struct DaisyPatch {
     }
 
     float GetKnobValue(int idx) const {
-        if (idx >= 0 && idx < 4) return daisy_knob[idx];
+        if (idx >= 0 && idx < 8) return daisy_knob[idx];
         return 0.5f;
     }
 

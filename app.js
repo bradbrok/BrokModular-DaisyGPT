@@ -7,7 +7,7 @@ import { DaisyDFU, isWebUSBSupported, isChromeBrowser } from './dfu.js';
 import { PROVIDERS, getApiKey, setApiKey, migrateOldKey, initKeyStore, getOllamaUrl, setOllamaUrl } from './providers.js';
 import { MIDIController } from './midi.js';
 import { WasmClangCompiler } from './compiler.js';
-import { BOARDS, BOARD_IDS, DEFAULT_BOARD, getBoardPromptFragment, getBoardKnobCount } from './boards.js';
+import { BOARDS, BOARD_IDS, DEFAULT_BOARD, getBoardPromptFragment, getBoardKnobCount, getBoardIOSummary } from './boards.js';
 import { createProject, addFile, deleteFile, renameFile, updateFileContent, getActiveFileContent, getFilePaths, getCppFiles, getAllFiles, getProjectSummary, getProjectContext, saveProject, saveProjectAs, loadProject, loadProjectByName, deleteProjectByName, duplicateProject, renameProject, loadProjectsList, migrateFromLegacy } from './project-manager.js';
 import { AudioAnalyzer, analyzeAudioBuffer } from './audio-analyzer.js';
 import { profileCode, getProfileContext, getCycleReferenceTable } from './profiler.js';
@@ -31,8 +31,8 @@ const state = {
   wasmBytes: null,
   audioContext: null,
   workletNode: null,
-  knobs: [0.5, 0.5, 0.5, 0.5],
-  knobLabels: ['Knob 1', 'Knob 2', 'Knob 3', 'Knob 4'],
+  knobs: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+  knobLabels: ['Knob 1', 'Knob 2', 'Knob 3', 'Knob 4', 'Knob 5', 'Knob 6', 'Knob 7', 'Knob 8'],
   rmsLevel: 0,
   history: JSON.parse(localStorage.getItem('daisy-gpt-history') || '[]'),
   compileRetries: 0,
@@ -101,7 +101,7 @@ function buildSystemPrompt() {
   let prompt = `You are daisy-gpt, an expert AI pair programmer for the Electro-Smith Daisy embedded audio platform using DaisySP.
 
 You work alongside the user as a knowledgeable collaborator, helping them build, debug, and understand DSP projects. You can:
-- Generate complete C++ code for any Daisy board (Seed, Patch, Pod, Petal, Field)
+- Generate complete C++ code for any Daisy board (Seed, Patch, Patch SM, Pod, Petal, Field)
 - Work with multi-file projects (multiple .cpp/.h files)
 - Explain code, debug errors, suggest improvements
 - Answer questions about DaisySP, synthesis, DSP theory, and embedded audio
@@ -842,15 +842,42 @@ function renderProjectFileTree() {
 }
 
 function extractKnobLabels(code) {
-  const labels = ['Knob 1', 'Knob 2', 'Knob 3', 'Knob 4'];
+  const knobCount = getBoardKnobCount(state.project?.board || DEFAULT_BOARD);
+  const labels = [];
+  for (let i = 0; i < knobCount; i++) labels.push(`Knob ${i + 1}`);
 
   // Parse line-by-line to avoid cross-line regex mis-matches
   for (const line of code.split('\n')) {
-    const m = line.match(/CTRL_(\d).*\/\/\s*(.+)/);
-    if (m) {
-      const idx = parseInt(m[1]) - 1;
-      if (idx >= 0 && idx < 4) {
-        labels[idx] = m[2].trim().substring(0, 20);
+    // Match DaisyPatch CTRL_1..CTRL_8
+    const ctrlMatch = line.match(/CTRL_(\d).*\/\/\s*(.+)/);
+    if (ctrlMatch) {
+      const idx = parseInt(ctrlMatch[1]) - 1;
+      if (idx >= 0 && idx < knobCount) {
+        labels[idx] = ctrlMatch[2].trim().substring(0, 20);
+      }
+    }
+    // Match Patch SM CV_1..CV_8
+    const cvMatch = line.match(/CV_(\d)(?:\b|[^_]).*\/\/\s*(.+)/);
+    if (cvMatch) {
+      const idx = parseInt(cvMatch[1]) - 1;
+      if (idx >= 0 && idx < knobCount) {
+        labels[idx] = cvMatch[2].trim().substring(0, 20);
+      }
+    }
+    // Match knob[N].Value() or knob[N] patterns (Pod, Petal, Field)
+    const knobArrMatch = line.match(/knob\[(\d)\].*\/\/\s*(.+)/);
+    if (knobArrMatch) {
+      const idx = parseInt(knobArrMatch[1]);
+      if (idx >= 0 && idx < knobCount) {
+        labels[idx] = knobArrMatch[2].trim().substring(0, 20);
+      }
+    }
+    // Match pod.knob1 / pod.knob2 style
+    const knobPropMatch = line.match(/knob(\d)\..*\/\/\s*(.+)/);
+    if (knobPropMatch) {
+      const idx = parseInt(knobPropMatch[1]) - 1;
+      if (idx >= 0 && idx < knobCount) {
+        labels[idx] = knobPropMatch[2].trim().substring(0, 20);
       }
     }
   }
@@ -997,10 +1024,10 @@ async function compileForDaisy() {
     const body = {};
     if (state.project && Object.keys(state.project.files).length > 1) {
       body.files = getAllFiles(state.project);
-      body.board = state.project.board;
     } else {
       body.code = state.code || getActiveFileContent(state.project);
     }
+    body.board = state.project?.board || DEFAULT_BOARD;
     body.target = 'qspi';
 
     const response = await fetch(url, {
@@ -1802,7 +1829,7 @@ function updateUI() {
 }
 
 function updateKnobLabels() {
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 8; i++) {
     const label = $(`#knob-label-${i}`);
     if (label) label.textContent = state.knobLabels[i];
   }
@@ -2338,9 +2365,8 @@ function switchToProject(name) {
     updateUI();
     updateKnobsForBoard();
 
-    // Update board selector
-    const boardSelect = $('#board-select');
-    if (boardSelect) boardSelect.value = state.project.board;
+    // Update board badge
+    updateBoardBadge();
 
     showToast(`Opened "${name}"`);
     renderProjectsList();
@@ -2573,6 +2599,94 @@ function updateKnobsForBoard() {
     state.knobs.push(0.5);
     state.knobLabels.push(`Knob ${state.knobs.length}`);
   }
+}
+
+// ─── Board Badge & Wizard ─────────────────────────────────────────
+
+/**
+ * Update the board badge in the header to reflect the current project's target device.
+ */
+function updateBoardBadge() {
+  const badge = $('#board-badge');
+  if (badge && state.project) {
+    const board = BOARDS[state.project.board];
+    badge.textContent = board ? board.name : state.project.board;
+    badge.title = board ? `Target: ${board.name} — ${board.description}` : 'Target device';
+  }
+}
+
+/**
+ * Show the board selection wizard modal. Returns a Promise that resolves with
+ * the selected board ID, or null if cancelled.
+ */
+function showBoardWizard() {
+  return new Promise((resolve) => {
+    const modal = $('#board-wizard-modal');
+    const grid = $('#board-wizard-grid');
+    const detail = $('#board-wizard-detail');
+    const confirmBtn = $('#btn-confirm-board-wizard');
+    const cancelBtn = $('#btn-cancel-board-wizard');
+    if (!modal || !grid) { resolve(null); return; }
+
+    let selectedBoard = null;
+
+    // Populate grid
+    grid.innerHTML = '';
+    for (const id of BOARD_IDS) {
+      const board = BOARDS[id];
+      const card = document.createElement('div');
+      card.className = 'board-wizard-card';
+      card.dataset.boardId = id;
+      card.innerHTML = `
+        <div class="board-wizard-card-name">${board.name}</div>
+        <div class="board-wizard-card-desc">${board.description}</div>
+      `;
+      card.addEventListener('click', () => {
+        // Deselect previous
+        grid.querySelectorAll('.board-wizard-card').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        selectedBoard = id;
+        confirmBtn.disabled = false;
+
+        // Show detail panel
+        const detailName = $('#board-wizard-detail-name');
+        const detailDesc = $('#board-wizard-detail-desc');
+        const detailIO = $('#board-wizard-detail-io');
+        if (detailName) detailName.textContent = board.name;
+        if (detailDesc) detailDesc.textContent = board.description;
+        if (detailIO) detailIO.textContent = getBoardIOSummary(id);
+        detail.classList.remove('hidden');
+      });
+      grid.appendChild(card);
+    }
+
+    // Reset state
+    selectedBoard = null;
+    confirmBtn.disabled = true;
+    detail.classList.add('hidden');
+
+    // Show modal
+    modal.classList.remove('hidden');
+
+    // Handlers
+    const cleanup = () => {
+      modal.classList.add('hidden');
+      confirmBtn.removeEventListener('click', onConfirm);
+      cancelBtn.removeEventListener('click', onCancel);
+    };
+
+    const onConfirm = () => {
+      cleanup();
+      resolve(selectedBoard);
+    };
+    const onCancel = () => {
+      cleanup();
+      resolve(null);
+    };
+
+    confirmBtn.addEventListener('click', onConfirm);
+    cancelBtn.addEventListener('click', onCancel);
+  });
 }
 
 // ─── MIDI ─────────────────────────────────────────────────────────
@@ -3000,23 +3114,8 @@ async function init() {
 
   syncProjectToState();
 
-  // Populate board selector
-  const boardSelect = $('#board-select');
-  if (boardSelect) {
-    boardSelect.innerHTML = '';
-    for (const id of BOARD_IDS) {
-      const opt = document.createElement('option');
-      opt.value = id;
-      opt.textContent = BOARDS[id].name;
-      if (id === state.project.board) opt.selected = true;
-      boardSelect.appendChild(opt);
-    }
-    boardSelect.addEventListener('change', (e) => {
-      state.project.board = e.target.value;
-      saveProject(state.project);
-      updateKnobsForBoard();
-    });
-  }
+  // Display board badge (read-only — board is locked at project creation)
+  updateBoardBadge();
 
   // Initialize knobs for current board
   updateKnobsForBoard();
@@ -3150,20 +3249,25 @@ async function init() {
   // Projects
   $('#btn-projects')?.addEventListener('click', showProjects);
   $('#btn-close-projects')?.addEventListener('click', closeProjects);
-  $('#btn-new-project')?.addEventListener('click', () => {
+  $('#btn-new-project')?.addEventListener('click', async () => {
+    const boardId = await showBoardWizard();
+    if (!boardId) return; // User cancelled
+
     if (state.project) saveProject(state.project);
-    state.project = createProject('untitled', state.project?.board || DEFAULT_BOARD);
+    state.project = createProject('untitled', boardId);
     syncProjectToState();
     syncCodeToEditor();
     renderProjectFileTree();
     saveProject(state.project);
-    showToast('Created new project');
+    showToast(`Created new project for ${BOARDS[boardId].name}`);
     renderProjectsList();
     updateUI();
+    updateBoardBadge();
+    updateKnobsForBoard();
     const nameInput = $('#project-name-input');
     if (nameInput) { nameInput.value = state.project.name; nameInput.select(); }
     const badge = $('#project-board-badge');
-    if (badge) badge.textContent = BOARDS[state.project.board]?.name || state.project.board;
+    if (badge) badge.textContent = BOARDS[boardId]?.name || boardId;
   });
   $('#project-name-input')?.addEventListener('change', handleProjectRename);
   $('#project-name-input')?.addEventListener('keydown', (e) => {
@@ -3255,7 +3359,7 @@ async function init() {
   });
 
   // Knob sliders
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 8; i++) {
     const slider = $(`#knob-${i}`);
     if (slider) {
       slider.value = state.knobs[i];

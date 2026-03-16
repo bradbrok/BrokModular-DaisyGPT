@@ -1,5 +1,5 @@
 # DaisyGPT ARM Compilation Makefile
-TARGET = patch
+TARGET ?= patch
 
 # Directories — set via environment
 LIBDAISY_DIR ?= /opt/daisy/libDaisy

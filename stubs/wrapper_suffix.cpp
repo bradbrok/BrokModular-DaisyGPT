@@ -45,11 +45,15 @@ void processBlock(int size) {
 }
 
 void setKnob(int index, float value) {
-    if (index >= 0 && index < 4) daisy_knob[index] = value;
+    if (index >= 0 && index < 8) daisy_knob[index] = value;
 }
 
 void setGate(int index, int value) {
     if (index >= 0 && index < 2) daisy_gate[index] = (value != 0);
+}
+
+void setCvIn(int index, float value) {
+    if (index >= 0 && index < 4) daisy_cv_in[index] = value;
 }
 
 void setPitchCV(float cv) { daisy_pitch_cv = cv; }

@@ -21,13 +21,15 @@ namespace daisy {
 }
 
 extern "C" {
-  extern float daisy_knob[4];
+  extern float daisy_knob[8];
   extern bool  daisy_gate[2];
+  extern bool  daisy_gate_out[2];
   extern float daisy_sample_rate;
   extern float daisy_pitch_cv;
   extern float daisy_velocity;
   extern float daisy_pitchbend;
   extern float daisy_cv_in[4];
+  extern float daisy_cv_out[2];
 }
 
 inline float cvToFreq(float cv) {
@@ -75,6 +77,143 @@ struct DaisyPatch {
                              daisy::AudioHandle::OutputBuffer, size_t)) {}
     void StartAudio(void (*)(float**, float**, size_t)) {}
 };
+`],
+
+// ─── daisy_patch_sm.h — Patch Submodule browser stub ────────────────
+['daisy_patch_sm.h', `#pragma once
+#include <cstddef>
+#include <cstdint>
+#include <cmath>
+
+#define DSY_SDRAM_BSS
+
+namespace daisy {
+  namespace AudioHandle {
+    using InputBuffer = const float* const*;
+    using OutputBuffer = float**;
+  }
+}
+
+extern "C" {
+  extern float daisy_knob[8];
+  extern bool  daisy_gate[2];
+  extern bool  daisy_gate_out[2];
+  extern float daisy_sample_rate;
+  extern float daisy_pitch_cv;
+  extern float daisy_velocity;
+  extern float daisy_pitchbend;
+  extern float daisy_cv_in[4];
+  extern float daisy_cv_out[2];
+}
+
+inline float cvToFreq(float cv) {
+    return 440.0f * powf(2.0f, cv - 0.75f);
+}
+
+enum Mapping { LINEAR, EXP, LOG };
+
+inline float fmap(float in, float mn, float mx, Mapping curve = LINEAR) {
+    switch (curve) {
+        case EXP: { float v = in * in; return mn + v * (mx - mn); }
+        case LOG: { float v = 1.0f - in; v = 1.0f - v * v; return mn + v * (mx - mn); }
+        default: return mn + in * (mx - mn);
+    }
+}
+
+inline float fclamp(float in, float mn, float mx) {
+    return fminf(fmaxf(in, mn), mx);
+}
+
+inline float mtof(float m) {
+    return powf(2.0f, (m - 69.0f) / 12.0f) * 440.0f;
+}
+
+struct dsy_gpio {
+    bool state = false;
+};
+inline void dsy_gpio_write(dsy_gpio* gpio, bool val) { gpio->state = val; }
+
+namespace daisy {
+namespace patch_sm {
+
+enum {
+    CV_1 = 0, CV_2, CV_3, CV_4,
+    CV_5, CV_6, CV_7, CV_8,
+    ADC_9, ADC_10, ADC_11, ADC_12,
+    ADC_LAST
+};
+
+enum {
+    CV_OUT_1 = 1,
+    CV_OUT_2 = 2,
+    CV_OUT_BOTH = 0
+};
+
+struct GateIn {
+    bool trig = false;
+    bool Trig() { bool t = trig; trig = false; return t; }
+    bool State() const { return trig; }
+};
+
+class DaisyPatchSM {
+public:
+    GateIn gate_in_1;
+    GateIn gate_in_2;
+    dsy_gpio gate_out_1;
+    dsy_gpio gate_out_2;
+    dsy_gpio user_led;
+
+    void Init() {
+        for (int i = 0; i < 8; i++) controls_[i] = (i < 4) ? daisy_knob[i] : 0.5f;
+        gate_in_1.trig = daisy_gate[0];
+        gate_in_2.trig = daisy_gate[1];
+    }
+
+    void ProcessAllControls() {
+        ProcessAnalogControls();
+        ProcessDigitalControls();
+    }
+
+    void ProcessAnalogControls() {
+        for (int i = 0; i < 4; i++) controls_[i] = daisy_knob[i];
+        for (int i = 0; i < 4; i++) controls_[i + 4] = daisy_cv_in[i];
+    }
+
+    void ProcessDigitalControls() {
+        gate_in_1.trig = daisy_gate[0];
+        gate_in_2.trig = daisy_gate[1];
+    }
+
+    float GetAdcValue(int idx) const {
+        if (idx >= 0 && idx < 12) return controls_[idx];
+        return 0.f;
+    }
+
+    void StartAdc() {}
+    void StopAdc() {}
+    void StartDac(void* cb = nullptr) { (void)cb; }
+    void StopDac() {}
+
+    void WriteCvOut(int channel, float voltage) {
+        (void)channel; (void)voltage;
+    }
+
+    void SetLed(bool s) { user_led.state = s; }
+    void SetAudioBlockSize(int) {}
+    float AudioSampleRate() const { return daisy_sample_rate; }
+    float AudioCallbackRate() const { return daisy_sample_rate / 48.f; }
+    void StartAudio(void (*)(daisy::AudioHandle::InputBuffer,
+                              daisy::AudioHandle::OutputBuffer, size_t)) {}
+    void StartAudio(void (*)(float**, float**, size_t)) {}
+
+private:
+    float controls_[12] = {};
+};
+
+} // namespace patch_sm
+} // namespace daisy
+
+using daisy::patch_sm::DaisyPatchSM;
 `],
 
 // ─── daisysp.h — Top-level include ─────────────────────────────────
