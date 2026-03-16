@@ -199,6 +199,51 @@
           <button class="gate-btn" id="gate-1">Gate 2</button>
         </div>
 
+        <!-- Signal Generator → CV Input -->
+        <div class="siggen-group">
+          <div class="siggen-header">
+            <span class="siggen-title">Signal Gen</span>
+            <label class="toggle-label siggen-toggle">
+              <input type="checkbox" id="siggen-enable">
+              <span class="toggle-switch"></span>
+            </label>
+            <select id="siggen-target" title="CV input target">
+              <option value="0">CV 1</option>
+              <option value="1">CV 2</option>
+              <option value="2">CV 3</option>
+              <option value="3">CV 4</option>
+            </select>
+          </div>
+          <div class="siggen-controls hidden" id="siggen-controls">
+            <div class="siggen-mode-row">
+              <select id="siggen-mode">
+                <option value="wave">Wave</option>
+                <option value="gate">Gate</option>
+                <option value="noise">Noise</option>
+                <option value="audioin">Audio In</option>
+              </select>
+            </div>
+            <div class="siggen-wave-row" id="siggen-wave-row">
+              <select id="siggen-waveform" title="Waveform">
+                <option value="sin">Sine</option>
+                <option value="tri">Triangle</option>
+                <option value="saw">Saw</option>
+                <option value="square">Square</option>
+              </select>
+              <div class="siggen-freq-row">
+                <input type="range" id="siggen-freq" min="-2" max="3" step="0.01" value="0" title="Frequency">
+                <span class="siggen-freq-val" id="siggen-freq-val">1.0 Hz</span>
+              </div>
+            </div>
+            <div class="siggen-gate-row hidden" id="siggen-gate-row">
+              <div class="siggen-freq-row">
+                <input type="range" id="siggen-gate-freq" min="-2" max="3" step="0.01" value="0.3" title="Gate rate">
+                <span class="siggen-freq-val" id="siggen-gate-freq-val">2.0 Hz</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- MIDI -->
         <div class="midi-group">
           <div class="midi-header">

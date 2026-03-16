@@ -1390,6 +1390,73 @@ function f32(value) {
   return [...new Uint8Array(buf)];
 }
 
+// ─── Signal Generator ─────────────────────────────────────────────
+
+function sendSigGenConfig() {
+  if (!state.workletNode) return;
+  const enableEl = $('#siggen-enable');
+  const targetEl = $('#siggen-target');
+  const modeEl = $('#siggen-mode');
+  const waveEl = $('#siggen-waveform');
+  const freqEl = $('#siggen-freq');
+  const gateFreqEl = $('#siggen-gate-freq');
+
+  const config = {
+    enabled: enableEl?.checked || false,
+    target: parseInt(targetEl?.value || '0'),
+    mode: modeEl?.value || 'wave',
+    waveform: waveEl?.value || 'sin',
+    freq: Math.pow(10, parseFloat(freqEl?.value || '0')),
+    gateFreq: Math.pow(10, parseFloat(gateFreqEl?.value || '0.3')),
+  };
+
+  state.workletNode.port.postMessage({ type: 'set-siggen', config });
+}
+
+function initSignalGenerator() {
+  const enableEl = $('#siggen-enable');
+  const controlsEl = $('#siggen-controls');
+  const modeEl = $('#siggen-mode');
+  const freqEl = $('#siggen-freq');
+  const freqValEl = $('#siggen-freq-val');
+  const gateFreqEl = $('#siggen-gate-freq');
+  const gateFreqValEl = $('#siggen-gate-freq-val');
+  const waveRowEl = $('#siggen-wave-row');
+  const gateRowEl = $('#siggen-gate-row');
+
+  if (!enableEl) return;
+
+  enableEl.addEventListener('change', () => {
+    if (controlsEl) controlsEl.classList.toggle('hidden', !enableEl.checked);
+    sendSigGenConfig();
+  });
+
+  $('#siggen-target')?.addEventListener('change', () => sendSigGenConfig());
+  modeEl?.addEventListener('change', () => {
+    const mode = modeEl.value;
+    if (waveRowEl) waveRowEl.classList.toggle('hidden', mode !== 'wave');
+    if (gateRowEl) gateRowEl.classList.toggle('hidden', mode !== 'gate');
+    sendSigGenConfig();
+  });
+  $('#siggen-waveform')?.addEventListener('change', () => sendSigGenConfig());
+
+  if (freqEl) {
+    freqEl.addEventListener('input', () => {
+      const hz = Math.pow(10, parseFloat(freqEl.value));
+      if (freqValEl) freqValEl.textContent = hz < 10 ? hz.toFixed(2) + ' Hz' : hz.toFixed(1) + ' Hz';
+      sendSigGenConfig();
+    });
+  }
+
+  if (gateFreqEl) {
+    gateFreqEl.addEventListener('input', () => {
+      const hz = Math.pow(10, parseFloat(gateFreqEl.value));
+      if (gateFreqValEl) gateFreqValEl.textContent = hz < 10 ? hz.toFixed(2) + ' Hz' : hz.toFixed(1) + ' Hz';
+      sendSigGenConfig();
+    });
+  }
+}
+
 // ─── Audio Input ──────────────────────────────────────────────────
 
 function switchAudioInputMode(mode) {
@@ -1705,6 +1772,9 @@ async function startAudio() {
 
     // Re-connect audio input sources to the new worklet
     connectAudioInputToWorklet();
+
+    // Re-send signal generator config to new worklet
+    sendSigGenConfig();
 
     state.isPlaying = true;
     startDiagLoop();
@@ -3394,6 +3464,9 @@ async function init() {
       btn.addEventListener('touchstart', (e) => { e.preventDefault(); triggerGate(); });
     }
   }
+
+  // Signal Generator
+  initSignalGenerator();
 
   // Populate skill dropdown
   const skillSelect = $('#skill-select');
