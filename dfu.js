@@ -154,9 +154,11 @@ export class DaisyDFU {
       throw new Error(`GET_STATUS transfer failed: ${result.status}`);
     }
 
-    // Use result.data directly — creating new DataView(result.data.buffer)
-    // can read from wrong offset if browser uses shared backing buffer
     const d = result.data;
+    const raw = [];
+    for (let i = 0; i < d.byteLength; i++) raw.push(d.getUint8(i).toString(16).padStart(2, '0'));
+    if (this.onLog) this.onLog(`GET_STATUS raw[${d.byteLength}]: ${raw.join(' ')}`);
+
     return {
       status: d.getUint8(0),
       pollTimeout: d.getUint8(1) | (d.getUint8(2) << 8) | (d.getUint8(3) << 16),
