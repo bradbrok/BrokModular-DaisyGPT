@@ -96,14 +96,19 @@ export class DaisyDFU {
     this.log(`Claimed interface ${this.interfaceNumber} [${names || 'no name'}]`);
   }
 
-  /** Detect whether we're connected to the ROM bootloader or Daisy bootloader */
+  /** Detect whether we're connected to the ROM bootloader or Daisy bootloader.
+   *  Primary: product name. Fallback: alternate interface names. */
   isRomBootloader() {
-    // ROM bootloader has interface with "0x08000000" (internal flash)
-    // Daisy bootloader has interface with "0x90000000" (QSPI flash)
-    return this.alternates.some(a => a.name.includes('0x08000000'));
+    const prod = (this.device.productName || '').toLowerCase();
+    if (prod.includes('dfu in fs mode') || prod.includes('stm32')) return true;
+    if (this.alternates.some(a => a.name.includes('0x08000000'))) return true;
+    // If no Daisy signature found, assume ROM
+    return !this.isDaisyBootloader();
   }
 
   isDaisyBootloader() {
+    const prod = (this.device.productName || '').toLowerCase();
+    if (prod.includes('daisy')) return true;
     return this.alternates.some(a => a.name.includes('0x90000000'));
   }
 
