@@ -9,6 +9,7 @@
 //   4. If same: jump directly to QSPI application
 
 #include "daisy_seed.h"
+#include "stm32h7xx_hal.h"
 #include "app_data.h"
 
 using namespace daisy;
