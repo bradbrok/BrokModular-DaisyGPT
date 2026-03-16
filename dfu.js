@@ -1,33 +1,11 @@
-// WebUSB DFU (Device Firmware Upgrade) for Daisy
+// WebUSB DfuSe (DFU with ST Extensions) for Daisy
 // Based on electro-smith/Programmer (MIT License)
-// Reference: USB DFU 1.1 specification
+// Reference: USB DFU 1.1 + ST DfuSe protocol
 
-const DFU_DETACH    = 0x00;
 const DFU_DNLOAD    = 0x01;
-const DFU_UPLOAD    = 0x02;
 const DFU_GETSTATUS = 0x03;
 const DFU_CLRSTATUS = 0x04;
-const DFU_GETSTATE  = 0x05;
 const DFU_ABORT     = 0x06;
-
-const DFU_STATUS = {
-  OK:                 0x00,
-  errTARGET:          0x01,
-  errFILE:            0x02,
-  errWRITE:           0x03,
-  errERASE:           0x04,
-  errCHECK_ERASED:    0x05,
-  errPROG:            0x06,
-  errVERIFY:          0x07,
-  errADDRESS:        0x08,
-  errNOTDONE:        0x09,
-  errFIRMWARE:       0x0A,
-  errVENDOR:         0x0B,
-  errUSBR:           0x0C,
-  errPOR:            0x0D,
-  errUNKNOWN:        0x0E,
-  errSTALLEDPKT:     0x0F,
-};
 
 const DFU_STATE = {
   appIDLE:                0,
@@ -43,19 +21,17 @@ const DFU_STATE = {
   dfuERROR:               10,
 };
 
-// STM32 DFU specific
-const SET_ADDRESS = 0x21;
-const ERASE_PAGE  = 0x41;
+// DfuSe commands (sent via DNLOAD at block 0)
+const DFUSE_SET_ADDRESS  = 0x21;
+const DFUSE_ERASE_SECTOR = 0x41;
 
-// Daisy Seed STM32H750 memory map
 const FLASH_BASE = 0x08000000;
-const QSPI_BASE  = 0x90000000;
 
 export class DaisyDFU {
   constructor() {
     this.device = null;
     this.interfaceNumber = 0;
-    this.transferSize = 2048;
+    this.transferSize = 1024; // STM32 DfuSe uses 1024
     this.onProgress = null;
     this.onLog = null;
   }
@@ -65,11 +41,9 @@ export class DaisyDFU {
   }
 
   async requestDevice() {
-    // STM32 DFU mode VID:PID
     const filters = [
-      { vendorId: 0x0483, productId: 0xDF11 },  // STMicroelectronics DFU
+      { vendorId: 0x0483, productId: 0xDF11 },
     ];
-
     try {
       this.device = await navigator.usb.requestDevice({ filters });
       this.log(`Device found: ${this.device.productName || 'STM32 DFU'}`);
@@ -87,17 +61,14 @@ export class DaisyDFU {
   async open() {
     await this.device.open();
 
-    // Find DFU interface
-    const config = this.device.configuration;
-    if (!config) {
+    if (!this.device.configuration) {
       await this.device.selectConfiguration(1);
     }
 
-    // Collect all DFU alternate settings so we can pick the right one for the target memory
+    // Find the DFU interface and collect alternates
     this.alternates = [];
     for (const iface of this.device.configuration.interfaces) {
       for (const alt of iface.alternates) {
-        // DFU class = 0xFE, subclass = 0x01
         if (alt.interfaceClass === 0xFE && alt.interfaceSubclass === 0x01) {
           this.interfaceNumber = iface.interfaceNumber;
           this.alternates.push({
@@ -110,34 +81,20 @@ export class DaisyDFU {
     }
 
     await this.device.claimInterface(this.interfaceNumber);
-    this.log(`Claimed interface ${this.interfaceNumber}`);
-  }
 
-  async selectAlternateForAddress(address) {
-    // STM32 DFU bootloader exposes different alt settings for different memories.
-    // Try to match by interface name string (e.g., contains "External" or the address).
-    // Fallback: alt 0 = internal flash, alt 1 = external QSPI flash.
-    const isQSPI = address >= QSPI_BASE;
-
+    // Select the alternate for internal flash (name contains 0x08000000)
+    let selected = false;
     for (const alt of this.alternates) {
-      const name = alt.name.toLowerCase();
-      if (isQSPI && (name.includes('external') || name.includes('qspi') || name.includes('0x90'))) {
+      if (alt.name.includes('0x08000000') || alt.name.toLowerCase().includes('internal')) {
         await this.device.selectAlternateInterface(this.interfaceNumber, alt.alternateSetting);
-        this.log(`Selected alternate ${alt.alternateSetting}: ${alt.name}`);
-        return;
-      }
-      if (!isQSPI && (name.includes('internal') || name.includes('0x08'))) {
-        await this.device.selectAlternateInterface(this.interfaceNumber, alt.alternateSetting);
-        this.log(`Selected alternate ${alt.alternateSetting}: ${alt.name}`);
-        return;
+        this.log(`Claimed interface ${this.interfaceNumber}, alternate ${alt.alternateSetting}: ${alt.name}`);
+        selected = true;
+        break;
       }
     }
-
-    // Fallback: alt 0 = internal, alt 1 = external
-    const fallbackAlt = isQSPI ? 1 : 0;
-    if (this.alternates.length > fallbackAlt) {
-      await this.device.selectAlternateInterface(this.interfaceNumber, this.alternates[fallbackAlt].alternateSetting);
-      this.log(`Selected alternate ${fallbackAlt} (fallback for ${isQSPI ? 'QSPI' : 'internal'} flash)`);
+    if (!selected && this.alternates.length > 0) {
+      await this.device.selectAlternateInterface(this.interfaceNumber, this.alternates[0].alternateSetting);
+      this.log(`Claimed interface ${this.interfaceNumber}, alternate ${this.alternates[0].alternateSetting}`);
     }
   }
 
@@ -151,19 +108,14 @@ export class DaisyDFU {
     }, 6);
 
     if (result.status !== 'ok') {
-      throw new Error(`GET_STATUS transfer failed: ${result.status}`);
+      throw new Error(`GET_STATUS transfer: ${result.status}`);
     }
 
     const d = result.data;
-    const raw = [];
-    for (let i = 0; i < d.byteLength; i++) raw.push(d.getUint8(i).toString(16).padStart(2, '0'));
-    if (this.onLog) this.onLog(`GET_STATUS raw[${d.byteLength}]: ${raw.join(' ')}`);
-
     return {
       status: d.getUint8(0),
-      pollTimeout: d.getUint8(1) | (d.getUint8(2) << 8) | (d.getUint8(3) << 16),
+      pollTimeout: d.getUint32(1, true) & 0xFFFFFF,  // 24-bit LE, mask off byte 4
       state: d.getUint8(4),
-      string: d.getUint8(5),
     };
   }
 
@@ -177,19 +129,14 @@ export class DaisyDFU {
     });
   }
 
-  async waitForState(targetState, maxRetries = 100) {
-    for (let i = 0; i < maxRetries; i++) {
-      const status = await this.getStatus();
-      if (status.state === targetState) return status;
-      if (status.state === DFU_STATE.dfuERROR) {
-        await this.clearStatus();
-        throw new Error(`DFU error: status ${status.status}`);
-      }
-      if (status.pollTimeout > 0) {
-        await this._sleep(status.pollTimeout);
-      }
-    }
-    throw new Error(`Timeout waiting for DFU state ${targetState}`);
+  async abort() {
+    await this.device.controlTransferOut({
+      requestType: 'class',
+      recipient: 'interface',
+      request: DFU_ABORT,
+      value: 0,
+      index: this.interfaceNumber,
+    });
   }
 
   async download(blockNum, data) {
@@ -202,92 +149,39 @@ export class DaisyDFU {
     }, data);
   }
 
-  async setAddress(address) {
-    const data = new Uint8Array(5);
-    data[0] = SET_ADDRESS;
-    data[1] = address & 0xFF;
-    data[2] = (address >> 8) & 0xFF;
-    data[3] = (address >> 16) & 0xFF;
-    data[4] = (address >> 24) & 0xFF;
-
-    await this.download(0, data);
-    await this.waitForState(DFU_STATE.dfuDNLOAD_IDLE);
+  /** Poll getStatus until state leaves dfuDNBUSY */
+  async pollUntilIdle() {
+    let status = await this.getStatus();
+    while (status.state !== DFU_STATE.dfuDNLOAD_IDLE &&
+           status.state !== DFU_STATE.dfuERROR &&
+           status.state !== DFU_STATE.dfuIDLE) {
+      await this._sleep(status.pollTimeout || 100);
+      status = await this.getStatus();
+    }
+    if (status.state === DFU_STATE.dfuERROR) {
+      throw new Error(`DFU error (status ${status.status})`);
+    }
+    return status;
   }
 
-  async eraseSector(address, retries = 3) {
-    for (let attempt = 0; attempt < retries; attempt++) {
-      const data = new Uint8Array(5);
-      data[0] = ERASE_PAGE;
-      data[1] = address & 0xFF;
-      data[2] = (address >> 8) & 0xFF;
-      data[3] = (address >> 16) & 0xFF;
-      data[4] = (address >> 24) & 0xFF;
-
-      await this.download(0, data);
-
-      // QSPI erase can take significantly longer than internal flash
-      const isQSPI = address >= QSPI_BASE;
-      const maxPolls = isQSPI ? 200 : 100;
-      const minDelay = isQSPI ? 200 : 100;
-
-      let status;
-      let success = false;
-      for (let i = 0; i < maxPolls; i++) {
-        status = await this.getStatus();
-        if (status.state === DFU_STATE.dfuDNLOAD_IDLE) {
-          success = true;
-          break;
-        }
-        if (status.state === DFU_STATE.dfuERROR) {
-          await this.clearStatus();
-          break;
-        }
-        await this._sleep(Math.max(status.pollTimeout, minDelay));
-      }
-
-      if (success) return;
-
-      if (attempt < retries - 1) {
-        this.log(`Erase failed at 0x${address.toString(16)}, retrying (${attempt + 1}/${retries})...`);
-        // Reset to idle state before retry
-        try {
-          await this.device.controlTransferOut({
-            requestType: 'class',
-            recipient: 'interface',
-            request: DFU_ABORT,
-            value: 0,
-            index: this.interfaceNumber,
-          });
-          await this._sleep(500);
-          const st = await this.getStatus();
-          if (st.state === DFU_STATE.dfuERROR) await this.clearStatus();
-        } catch (e) {
-          // ignore recovery errors
-        }
-      }
-    }
-
-    throw new Error(`Erase error at 0x${address.toString(16)} after ${retries} attempts`);
+  /** Send DfuSe special command (block 0) and poll until done */
+  async dfuseCommand(command, address) {
+    const payload = new ArrayBuffer(5);
+    const view = new DataView(payload);
+    view.setUint8(0, command);
+    view.setUint32(1, address, true);
+    await this.download(0, payload);
+    await this.pollUntilIdle();
   }
 
-  async massErase() {
-    this.log('Mass erase...');
-    const data = new Uint8Array([0x41]);
-    await this.download(0, data);
-
-    for (let i = 0; i < 200; i++) {
-      const status = await this.getStatus();
-      if (status.state === DFU_STATE.dfuDNLOAD_IDLE) {
-        this.log('Mass erase complete');
-        return;
-      }
-      if (status.state === DFU_STATE.dfuERROR) {
-        await this.clearStatus();
-        throw new Error('Mass erase failed');
-      }
-      await this._sleep(500);
+  async abortToIdle() {
+    await this.abort();
+    let status = await this.getStatus();
+    if (status.state === DFU_STATE.dfuERROR) {
+      await this.clearStatus();
+      status = await this.getStatus();
     }
-    throw new Error('Mass erase timeout');
+    return status;
   }
 
   async flash(firmware, baseAddress = FLASH_BASE) {
@@ -295,84 +189,40 @@ export class DaisyDFU {
 
     const totalBytes = firmware.byteLength;
     let bytesWritten = 0;
-    const blockSize = this.transferSize;
+    const xferSize = this.transferSize;
 
     this.log(`Flashing ${totalBytes} bytes to 0x${baseAddress.toString(16)}...`);
 
-    // Force device to a known state: abort any pending operation, clear errors
-    try {
-      await this.device.controlTransferOut({
-        requestType: 'class',
-        recipient: 'interface',
-        request: DFU_ABORT,
-        value: 0,
-        index: this.interfaceNumber,
-      });
-    } catch (e) { /* ignore */ }
-    await this._sleep(100);
-
-    // Clear any error state and get to dfuIDLE
-    let status;
-    for (let i = 0; i < 5; i++) {
-      status = await this.getStatus();
-      this.log(`DFU state: ${status.state}, status: ${status.status}`);
-      if (status.state === DFU_STATE.dfuIDLE) break;
-      if (status.state === DFU_STATE.dfuERROR) {
-        await this.clearStatus();
-        continue;
-      }
-      // For any other state, try abort
-      await this.device.controlTransferOut({
-        requestType: 'class',
-        recipient: 'interface',
-        request: DFU_ABORT,
-        value: 0,
-        index: this.interfaceNumber,
-      });
-      await this._sleep(100);
-    }
-    if (!status || status.state !== DFU_STATE.dfuIDLE) {
-      throw new Error(`Cannot reach dfuIDLE (state ${status ? status.state : 'unknown'})`);
+    // Get to dfuIDLE
+    let status = await this.abortToIdle();
+    this.log(`DFU state: ${status.state}`);
+    if (status.state !== DFU_STATE.dfuIDLE) {
+      throw new Error(`Cannot reach dfuIDLE (state ${status.state})`);
     }
 
-    // Erase sectors that will be written
-    const sectorSize = 0x20000; // 128KB for STM32H750 internal flash
-    const startSector = baseAddress;
-    const endSector = baseAddress + totalBytes;
-    for (let addr = startSector; addr < endSector; addr += sectorSize) {
+    // Erase sectors covering the firmware (128KB sectors for STM32H750)
+    const sectorSize = 0x20000;
+    for (let addr = baseAddress; addr < baseAddress + totalBytes; addr += sectorSize) {
       this.log(`Erasing sector at 0x${addr.toString(16)}...`);
-      await this.eraseSector(addr);
+      await this.dfuseCommand(DFUSE_ERASE_SECTOR, addr);
     }
     this.log('Erase complete, writing...');
 
-    // Set start address
-    await this.setAddress(baseAddress);
+    // Write data: DfuSe requires SET_ADDRESS before each chunk, data at block 2
+    let address = baseAddress;
+    for (let offset = 0; offset < totalBytes; offset += xferSize) {
+      const end = Math.min(offset + xferSize, totalBytes);
+      const chunk = firmware.slice(offset, end);
 
-    // Write data in blocks
-    let blockNum = 2;
-    for (let offset = 0; offset < totalBytes; offset += blockSize) {
-      const end = Math.min(offset + blockSize, totalBytes);
-      const chunk = new Uint8Array(firmware.slice(offset, end));
+      // Set address pointer for this chunk
+      await this.dfuseCommand(DFUSE_SET_ADDRESS, address);
 
-      await this.download(blockNum, chunk);
+      // Send data at block 2
+      await this.download(2, chunk);
+      await this.pollUntilIdle();
 
-      // STM32 DFU: DNLOAD → dfuDNLOAD_SYNC → (getStatus) → dfuDNBUSY → (getStatus) → dfuDNLOAD_IDLE
-      status = await this.getStatus();
-      // Handle DNLOAD_SYNC: need another getStatus to trigger programming
-      if (status.state === DFU_STATE.dfuDNLOAD_SYNC) {
-        status = await this.getStatus();
-      }
-      if (status.state === DFU_STATE.dfuDNBUSY) {
-        await this._sleep(status.pollTimeout || 10);
-        status = await this.getStatus();
-      }
-
-      if (status.state !== DFU_STATE.dfuDNLOAD_IDLE) {
-        throw new Error(`Write failed at offset ${offset}: state ${status.state}`);
-      }
-
+      address += chunk.byteLength;
       bytesWritten += chunk.byteLength;
-      blockNum++;
 
       if (this.onProgress) {
         this.onProgress({
@@ -384,19 +234,22 @@ export class DaisyDFU {
       }
     }
 
-    this.log(`Writing done, manifesting...`);
+    this.log('Write complete, manifesting...');
 
-    // Send zero-length download to signal end
+    // Manifestation: set address to start, then zero-length DNLOAD at block 0
+    await this.dfuseCommand(DFUSE_SET_ADDRESS, baseAddress);
     await this.download(0, new ArrayBuffer(0));
     try {
       status = await this.getStatus();
-      // Wait for manifest if needed
-      if (status.state === DFU_STATE.dfuMANIFEST_SYNC || status.state === DFU_STATE.dfuMANIFEST) {
+      // Poll until manifest
+      while (status.state !== DFU_STATE.dfuMANIFEST &&
+             status.state !== DFU_STATE.dfuMANIFEST_WAIT_RESET &&
+             status.state !== DFU_STATE.dfuIDLE) {
         await this._sleep(status.pollTimeout || 100);
-        try { await this.getStatus(); } catch (e) { /* device resets */ }
+        status = await this.getStatus();
       }
     } catch (e) {
-      // Device may reset here — that's expected
+      // Device resets during manifestation — expected
     }
 
     this.log(`Flash complete! ${bytesWritten} bytes written.`);
@@ -419,7 +272,6 @@ export class DaisyDFU {
   }
 }
 
-// Check WebUSB support
 export function isWebUSBSupported() {
   return !!navigator.usb;
 }
