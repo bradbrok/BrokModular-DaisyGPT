@@ -2611,8 +2611,8 @@ async function flashToDaisy() {
     await dfu.open();
 
     if (state.armBinaryBytes) {
-      const addr = parseInt(state.armTargetAddress, 16) || 0x90040000;
-      dfu.log(`Flashing ARM binary (${state.armBinaryBytes.length} bytes) to ${state.armTargetAddress}...`);
+      const addr = parseInt(state.armTargetAddress, 16) || 0x08000000;
+      dfu.log(`Flashing ${state.armBinaryBytes.length} bytes to 0x${addr.toString(16)}...`);
       await dfu.flash(state.armBinaryBytes.buffer, addr);
     } else if (state.remoteCompileUrl && !state.armBinaryBytes) {
       dfu.log('No ARM binary available. Click "Compile for Daisy" first.');
