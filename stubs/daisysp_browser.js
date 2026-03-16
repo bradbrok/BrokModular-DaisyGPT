@@ -143,6 +143,17 @@ enum {
     ADC_LAST
 };
 
+// Physical pin aliases (Patch SM carrier board header pins)
+static constexpr int C5  = CV_1;   // 0
+static constexpr int C4  = CV_2;   // 1
+static constexpr int C3  = CV_3;   // 2
+static constexpr int C2  = CV_4;   // 3
+static constexpr int C6  = CV_5;   // 4
+static constexpr int C7  = CV_6;   // 5
+static constexpr int C8  = CV_7;   // 6
+static constexpr int C9  = CV_8;   // 7
+static constexpr int C10 = ADC_9;  // 8
+
 enum {
     CV_OUT_1 = 1,
     CV_OUT_2 = 2,

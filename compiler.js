@@ -644,12 +644,31 @@ export class WasmClangCompiler {
   }
 
   // Strip infinite loop at end of main() so it returns
+  // Uses brace-counting to handle nested braces (e.g., display update loops)
   _stripInfiniteLoop(code) {
-    // Handle: while(1){}, while(true){}, for(;;){}
-    // These appear at the end of main() in Daisy code
-    return code
-      .replace(/\bwhile\s*\(\s*(?:1|true)\s*\)\s*\{[^{}]*\}/g, '/* loop stripped */')
-      .replace(/\bfor\s*\(\s*;?\s*;?\s*\)\s*\{[^{}]*\}/g, '/* loop stripped */');
+    const pattern = /\b(?:while\s*\(\s*(?:1|true)\s*\)|for\s*\(\s*;?\s*;?\s*\))\s*\{/g;
+    let result = code;
+    let match;
+    // Process from end to start so replacements don't shift earlier indices
+    const matches = [];
+    while ((match = pattern.exec(result)) !== null) {
+      matches.push({ index: match.index, length: match[0].length });
+    }
+    for (let m = matches.length - 1; m >= 0; m--) {
+      const { index, length } = matches[m];
+      const braceStart = index + length - 1; // position of opening {
+      let depth = 1;
+      let i = braceStart + 1;
+      while (i < result.length && depth > 0) {
+        if (result[i] === '{') depth++;
+        else if (result[i] === '}') depth--;
+        i++;
+      }
+      if (depth === 0) {
+        result = result.slice(0, index) + '/* loop stripped */' + result.slice(i);
+      }
+    }
+    return result;
   }
 
   // Wrap user code with prefix (global defs) and suffix (export functions)

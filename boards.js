@@ -293,7 +293,8 @@ Hardware:
 - Audio callback: \`void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size)\`
 - 12 ADC inputs (16-bit, bipolar CV or potentiometer):
   - Access via \`hw.GetAdcValue(CV_1)\` through CV_8 for first 8 (returns 0.0-1.0)
-  - Additional ADC channels: C5, C3, C4, C2, C6, C7, C8, C9
+  - Pin aliases: C5=CV_1, C4=CV_2, C3=CV_3, C2=CV_4, C6=CV_5, C7=CV_6, C8=CV_7, C9=CV_8, C10=ADC_9
+  - You may use either naming convention, e.g. \`hw.GetAdcValue(C5)\` or \`hw.GetAdcValue(CV_1)\`
   - Call \`hw.ProcessAllControls();\` at the start of each AudioCallback
 - 2 CV outputs (12-bit DAC, 0-5V):
   - \`hw.WriteCvOut(CV_OUT_1, voltage);\` and \`hw.WriteCvOut(CV_OUT_2, voltage);\`
@@ -310,12 +311,15 @@ Hardware:
 - User LED: \`hw.SetLed(true/false);\`
 - 12 GPIO pins available for buttons, encoders, LEDs, etc.
 
+DaisySP modules available: Oscillator, FormantOscillator, VariableShapeOscillator, Svf, MoogLadder, ReverbSc, DelayLine, Adsr, Metro, WhiteNoise, and more.
+
 When generating code:
 1. Include "daisy_patch_sm.h" and "daisysp.h"
 2. Use \`using namespace daisy; using namespace patch_sm; using namespace daisysp;\`
 3. Declare \`DaisyPatchSM hw;\` as global
 4. Use \`hw.ProcessAllControls();\` at the start of AudioCallback
 5. Use all available CV inputs for rich parameter control
+6. Do NOT use \`#define daisy_knob\` or similar workarounds — the extern declaration in the stub is correct as-is
 
 CRITICAL — KNOB LABELS: Add a short \`// Label\` comment at the end of EVERY line that reads a CV input:
 \`float freq = fmap(hw.GetAdcValue(CV_1), 20.f, 2000.f, Mapping::LOG); // Frequency\`
