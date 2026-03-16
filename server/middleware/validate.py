@@ -2,7 +2,7 @@ MAX_SOURCE_SIZE = 100 * 1024  # 100KB per file
 MAX_TOTAL_SIZE = 500 * 1024  # 500KB total for multi-file projects
 MAX_FILES = 20  # Maximum number of files in a project
 
-VALID_BOARDS = {'seed', 'patch', 'pod', 'petal', 'field'}
+VALID_BOARDS = {'seed', 'patch', 'patch_sm', 'pod', 'petal', 'field'}
 
 
 def validate_compile_request(request):
