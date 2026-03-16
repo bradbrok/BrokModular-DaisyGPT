@@ -1,6 +1,10 @@
 // WebUSB DfuSe (DFU with ST Extensions) for Daisy
 // Based on electro-smith/Programmer (MIT License)
 // Reference: USB DFU 1.1 + ST DfuSe protocol
+//
+// Supports two-phase flashing for QSPI:
+//   Phase 1: Flash Daisy bootloader to internal flash via ROM DfuSe
+//   Phase 2: Flash user app to QSPI via Daisy bootloader DfuSe
 
 const DFU_DNLOAD    = 0x01;
 const DFU_GETSTATUS = 0x03;
@@ -26,12 +30,13 @@ const DFUSE_SET_ADDRESS  = 0x21;
 const DFUSE_ERASE_SECTOR = 0x41;
 
 const FLASH_BASE = 0x08000000;
+const QSPI_BASE  = 0x90040000;
 
 export class DaisyDFU {
   constructor() {
     this.device = null;
     this.interfaceNumber = 0;
-    this.transferSize = 1024; // STM32 DfuSe uses 1024
+    this.transferSize = 1024;
     this.onProgress = null;
     this.onLog = null;
   }
@@ -82,21 +87,43 @@ export class DaisyDFU {
 
     await this.device.claimInterface(this.interfaceNumber);
 
-    // Select the alternate for internal flash (name contains 0x08000000)
-    let selected = false;
+    // Select first alternate by default
+    if (this.alternates.length > 0) {
+      await this.device.selectAlternateInterface(this.interfaceNumber, this.alternates[0].alternateSetting);
+    }
+
+    const names = this.alternates.map(a => a.name).join(', ');
+    this.log(`Claimed interface ${this.interfaceNumber} [${names || 'no name'}]`);
+  }
+
+  /** Detect whether we're connected to the ROM bootloader or Daisy bootloader */
+  isRomBootloader() {
+    // ROM bootloader has interface with "0x08000000" (internal flash)
+    // Daisy bootloader has interface with "0x90000000" (QSPI flash)
+    return this.alternates.some(a => a.name.includes('0x08000000'));
+  }
+
+  isDaisyBootloader() {
+    return this.alternates.some(a => a.name.includes('0x90000000'));
+  }
+
+  /** Select the alternate interface whose name contains the given address prefix */
+  async selectAlternateForAddress(address) {
+    const addrStr = '0x' + (address & 0xF0000000).toString(16).padStart(8, '0');
     for (const alt of this.alternates) {
-      if (alt.name.includes('0x08000000') || alt.name.toLowerCase().includes('internal')) {
+      if (alt.name.includes(addrStr) || alt.name.includes(address.toString(16))) {
         await this.device.selectAlternateInterface(this.interfaceNumber, alt.alternateSetting);
-        this.log(`Claimed interface ${this.interfaceNumber}, alternate ${alt.alternateSetting}: ${alt.name}`);
-        selected = true;
-        break;
+        this.log(`Selected alternate ${alt.alternateSetting}: ${alt.name}`);
+        return;
       }
     }
-    if (!selected && this.alternates.length > 0) {
+    // Fallback: first alternate
+    if (this.alternates.length > 0) {
       await this.device.selectAlternateInterface(this.interfaceNumber, this.alternates[0].alternateSetting);
-      this.log(`Claimed interface ${this.interfaceNumber}, alternate ${this.alternates[0].alternateSetting}`);
     }
   }
+
+  // ─── Low-level DFU protocol ────────────────────────────────────
 
   async getStatus() {
     const result = await this.device.controlTransferIn({
@@ -114,7 +141,7 @@ export class DaisyDFU {
     const d = result.data;
     return {
       status: d.getUint8(0),
-      pollTimeout: d.getUint32(1, true) & 0xFFFFFF,  // 24-bit LE, mask off byte 4
+      pollTimeout: d.getUint32(1, true) & 0xFFFFFF,
       state: d.getUint8(4),
     };
   }
@@ -149,7 +176,6 @@ export class DaisyDFU {
     }, data);
   }
 
-  /** Poll getStatus until state leaves dfuDNBUSY */
   async pollUntilIdle() {
     let status = await this.getStatus();
     while (status.state !== DFU_STATE.dfuDNLOAD_IDLE &&
@@ -164,7 +190,6 @@ export class DaisyDFU {
     return status;
   }
 
-  /** Send DfuSe special command (block 0) and poll until done */
   async dfuseCommand(command, address) {
     const payload = new ArrayBuffer(5);
     const view = new DataView(payload);
@@ -184,6 +209,19 @@ export class DaisyDFU {
     return status;
   }
 
+  // ─── Flash operations ──────────────────────────────────────────
+
+  /** Erase sectors covering a memory range, using appropriate sector size */
+  async eraseSectors(baseAddress, totalBytes) {
+    // QSPI: 64KB sectors. Internal flash: 128KB sectors.
+    const sectorSize = baseAddress >= 0x90000000 ? 0x10000 : 0x20000;
+    for (let addr = baseAddress; addr < baseAddress + totalBytes; addr += sectorSize) {
+      this.log(`Erasing sector at 0x${addr.toString(16)}...`);
+      await this.dfuseCommand(DFUSE_ERASE_SECTOR, addr);
+    }
+  }
+
+  /** Write firmware to the device at the given address */
   async flash(firmware, baseAddress = FLASH_BASE) {
     if (!this.device) throw new Error('No device connected');
 
@@ -193,31 +231,26 @@ export class DaisyDFU {
 
     this.log(`Flashing ${totalBytes} bytes to 0x${baseAddress.toString(16)}...`);
 
+    // Select correct alternate for target address
+    await this.selectAlternateForAddress(baseAddress);
+
     // Get to dfuIDLE
     let status = await this.abortToIdle();
-    this.log(`DFU state: ${status.state}`);
     if (status.state !== DFU_STATE.dfuIDLE) {
       throw new Error(`Cannot reach dfuIDLE (state ${status.state})`);
     }
 
-    // Erase sectors covering the firmware (128KB sectors for STM32H750)
-    const sectorSize = 0x20000;
-    for (let addr = baseAddress; addr < baseAddress + totalBytes; addr += sectorSize) {
-      this.log(`Erasing sector at 0x${addr.toString(16)}...`);
-      await this.dfuseCommand(DFUSE_ERASE_SECTOR, addr);
-    }
+    // Erase
+    await this.eraseSectors(baseAddress, totalBytes);
     this.log('Erase complete, writing...');
 
-    // Write data: DfuSe requires SET_ADDRESS before each chunk, data at block 2
+    // Write: DfuSe requires SET_ADDRESS before each chunk, data at block 2
     let address = baseAddress;
     for (let offset = 0; offset < totalBytes; offset += xferSize) {
       const end = Math.min(offset + xferSize, totalBytes);
       const chunk = firmware.slice(offset, end);
 
-      // Set address pointer for this chunk
       await this.dfuseCommand(DFUSE_SET_ADDRESS, address);
-
-      // Send data at block 2
       await this.download(2, chunk);
       await this.pollUntilIdle();
 
@@ -236,12 +269,11 @@ export class DaisyDFU {
 
     this.log('Write complete, manifesting...');
 
-    // Manifestation: set address to start, then zero-length DNLOAD at block 0
+    // Manifestation: set address to start, zero-length DNLOAD at block 0
     await this.dfuseCommand(DFUSE_SET_ADDRESS, baseAddress);
     await this.download(0, new ArrayBuffer(0));
     try {
       status = await this.getStatus();
-      // Poll until manifest
       while (status.state !== DFU_STATE.dfuMANIFEST &&
              status.state !== DFU_STATE.dfuMANIFEST_WAIT_RESET &&
              status.state !== DFU_STATE.dfuIDLE) {
@@ -253,6 +285,68 @@ export class DaisyDFU {
     }
 
     this.log(`Flash complete! ${bytesWritten} bytes written.`);
+  }
+
+  /** Wait for device to disconnect and reconnect (e.g., after bootloader flash) */
+  async waitForReconnect(timeoutMs = 10000) {
+    const device = this.device;
+    await this.close();
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        navigator.usb.removeEventListener('connect', onConnect);
+        reject(new Error('Device did not reconnect'));
+      }, timeoutMs);
+
+      const onConnect = async (event) => {
+        const dev = event.device;
+        if (dev.vendorId === 0x0483 && dev.productId === 0xDF11) {
+          clearTimeout(timer);
+          navigator.usb.removeEventListener('connect', onConnect);
+          // Small delay for device to fully initialize
+          await this._sleep(1000);
+          this.device = dev;
+          resolve();
+        }
+      };
+
+      navigator.usb.addEventListener('connect', onConnect);
+    });
+  }
+
+  /**
+   * Two-phase QSPI flash:
+   *   Phase 1: Flash bootloader to internal flash (if needed)
+   *   Phase 2: Flash app to QSPI via Daisy bootloader
+   */
+  async flashQSPI(appFirmware, bootloaderFirmware, appAddress = QSPI_BASE) {
+    if (!this.device) throw new Error('No device connected');
+
+    // Phase 1: If connected to ROM bootloader, flash the Daisy bootloader first
+    if (this.isRomBootloader()) {
+      this.log('ROM bootloader detected — flashing Daisy bootloader...');
+      await this.flash(bootloaderFirmware, FLASH_BASE);
+
+      this.log('Waiting for Daisy bootloader to start...');
+      await this.waitForReconnect(10000);
+
+      // Re-open the device (now running Daisy bootloader)
+      await this.open();
+
+      if (!this.isDaisyBootloader()) {
+        throw new Error('Expected Daisy bootloader after reset, but interface not found');
+      }
+      this.log('Daisy bootloader connected!');
+
+    } else if (this.isDaisyBootloader()) {
+      this.log('Daisy bootloader already running');
+    } else {
+      throw new Error('Unknown bootloader — cannot determine device type from interfaces');
+    }
+
+    // Phase 2: Flash app to QSPI
+    this.log('Flashing app to QSPI...');
+    await this.flash(appFirmware, appAddress);
   }
 
   async close() {

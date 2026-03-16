@@ -1,3 +1,4 @@
+import os
 import re
 import time
 from flask import Blueprint, request, jsonify, Response
@@ -7,6 +8,8 @@ from middleware.rate_limit import limiter
 from services.sanitize import sanitize_code
 from services.compiler import compile_code
 from services.queue import enqueue, QueueFullError
+
+BOOTLOADER_PATH = '/opt/daisy/libDaisy/core/dsy_bootloader_v6_2-intdfu-2000ms.bin'
 
 compile_bp = Blueprint('compile', __name__)
 
@@ -80,5 +83,24 @@ def compile_endpoint():
             'X-Compile-Time': f'{elapsed:.2f}',
             'X-Binary-Size': str(len(binary_data)),
             'X-Target-Address': target_address,
+        }
+    )
+
+
+@compile_bp.route('/bootloader', methods=['GET'])
+@limiter.limit("10 per 15 minutes")
+def bootloader_endpoint():
+    if not os.path.exists(BOOTLOADER_PATH):
+        return jsonify({'error': 'not_found', 'message': 'Bootloader binary not found'}), 404
+
+    with open(BOOTLOADER_PATH, 'rb') as f:
+        binary_data = f.read()
+
+    return Response(
+        binary_data,
+        mimetype='application/octet-stream',
+        headers={
+            'X-Binary-Size': str(len(binary_data)),
+            'Content-Disposition': 'attachment; filename="dsy_bootloader.bin"',
         }
     )

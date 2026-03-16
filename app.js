@@ -1028,7 +1028,7 @@ async function compileForDaisy() {
       body.code = state.code || getActiveFileContent(state.project);
     }
     body.board = state.project?.board || DEFAULT_BOARD;
-    body.target = 'flash';
+    body.target = 'qspi';
 
     const response = await fetch(url, {
       method: 'POST',
@@ -2610,16 +2610,31 @@ async function flashToDaisy() {
 
     await dfu.open();
 
-    if (state.armBinaryBytes) {
-      const addr = parseInt(state.armTargetAddress, 16) || 0x08000000;
-      dfu.log(`Flashing ${state.armBinaryBytes.length} bytes to 0x${addr.toString(16)}...`);
-      await dfu.flash(state.armBinaryBytes.buffer, addr);
-    } else if (state.remoteCompileUrl && !state.armBinaryBytes) {
-      dfu.log('No ARM binary available. Click "Compile for Daisy" first.');
+    if (!state.armBinaryBytes) {
+      if (state.remoteCompileUrl) {
+        dfu.log('No ARM binary available. Click "Compile for Daisy" first.');
+      } else {
+        dfu.log('No compile server configured. Set it in API Keys settings.');
+      }
       return;
+    }
+
+    const addr = parseInt(state.armTargetAddress, 16) || 0x08000000;
+    const isQSPI = addr >= 0x90000000;
+
+    if (isQSPI) {
+      // Two-phase QSPI flash: bootloader → app
+      dfu.log('QSPI target — fetching Daisy bootloader...');
+      const blUrl = state.remoteCompileUrl.replace(/\/+$/, '') + '/bootloader';
+      const blResp = await fetch(blUrl);
+      if (!blResp.ok) throw new Error(`Failed to fetch bootloader: ${blResp.status}`);
+      const bootloaderFirmware = await blResp.arrayBuffer();
+      dfu.log(`Bootloader: ${bootloaderFirmware.byteLength} bytes`);
+
+      await dfu.flashQSPI(state.armBinaryBytes.buffer, bootloaderFirmware, addr);
     } else {
-      dfu.log('No compile server configured. Set it in API Keys settings.');
-      return;
+      // Direct internal flash
+      await dfu.flash(state.armBinaryBytes.buffer, addr);
     }
 
     await dfu.close();
