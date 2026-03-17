@@ -2603,7 +2603,7 @@ async function flashToDaisy() {
 
   try {
     dfu.log('Waiting for DFU device...');
-    dfu.log('Put Daisy in DFU mode: hold BOOT, tap RESET');
+    dfu.log('Select your Daisy from the USB device picker.');
 
     const found = await dfu.requestDevice();
     if (!found) return;
@@ -2622,23 +2622,34 @@ async function flashToDaisy() {
     const addr = parseInt(state.armTargetAddress, 16) || 0x08000000;
     const isQSPI = addr >= 0x90000000;
 
-    if (isQSPI) {
-      // Two-phase QSPI flash: bootloader → app
-      dfu.log('QSPI target — fetching Daisy bootloader...');
+    if (isQSPI && dfu.isDaisyBootloader()) {
+      // Daisy bootloader detected — flash app directly to QSPI
+      dfu.log('Daisy bootloader detected — flashing to QSPI...');
+      await dfu.flash(state.armBinaryBytes.buffer, addr);
+      await dfu.close();
+      dfu.log('Done! Tap RESET to run your patch.');
+
+    } else if (isQSPI && dfu.isRomBootloader()) {
+      // ROM bootloader — need to install Daisy bootloader first
+      dfu.log('ROM bootloader detected — installing Daisy bootloader first...');
       const blUrl = state.remoteCompileUrl.replace(/\/+$/, '') + '/bootloader';
       const blResp = await fetch(blUrl);
       if (!blResp.ok) throw new Error(`Failed to fetch bootloader: ${blResp.status}`);
       const bootloaderFirmware = await blResp.arrayBuffer();
-      dfu.log(`Bootloader: ${bootloaderFirmware.byteLength} bytes`);
 
-      await dfu.flashQSPI(state.armBinaryBytes.buffer, bootloaderFirmware, addr);
+      await dfu.flash(bootloaderFirmware, 0x08000000);
+      await dfu.close();
+      dfu.log('');
+      dfu.log('Daisy bootloader installed!');
+      dfu.log('Now: tap RESET (do NOT hold BOOT), then click Flash again.');
+      dfu.log('The bootloader LED will flash — that means it is ready.');
+
     } else {
       // Direct internal flash
       await dfu.flash(state.armBinaryBytes.buffer, addr);
+      await dfu.close();
+      dfu.log('Done!');
     }
-
-    await dfu.close();
-    dfu.log('Done!');
 
   } catch (err) {
     dfu.log(`Error: ${err.message}`);
