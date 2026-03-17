@@ -2644,7 +2644,10 @@ async function flashToDaisy() {
       dfu.log('Now: tap RESET (do NOT hold BOOT), wait for LED to flash,');
       dfu.log('then click "Flash Again" below.');
       const flashAgainBtn = $('#btn-flash-again');
-      if (flashAgainBtn) flashAgainBtn.style.display = '';
+      if (flashAgainBtn) {
+        flashAgainBtn.style.display = '';
+        flashAgainBtn.scrollIntoView({ behavior: 'smooth' });
+      }
 
     } else {
       // Direct internal flash
