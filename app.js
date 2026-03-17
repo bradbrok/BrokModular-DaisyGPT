@@ -2623,7 +2623,7 @@ async function flashToDaisy() {
     const isQSPI = addr >= 0x90000000;
 
     if (isQSPI) {
-      const bootloaderInstalled = localStorage.getItem('daisy-bootloader-installed');
+      const bootloaderInstalled = dfu.isDaisyBootloader() || localStorage.getItem('daisy-bootloader-installed');
 
       if (bootloaderInstalled) {
         // Bootloader already installed — flash app to QSPI
