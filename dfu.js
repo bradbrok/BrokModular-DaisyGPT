@@ -292,33 +292,28 @@ export class DaisyDFU {
     this.log(`Flash complete! ${bytesWritten} bytes written.`);
   }
 
-  /** Wait for device to disconnect (user taps RESET) then reconnect (bootloader starts) */
-  async waitForReconnect(timeoutMs = 30000) {
-    const isDfuDevice = d => d.vendorId === 0x0483 && d.productId === 0xDF11;
+  /** Poll for Daisy bootloader after ROM bootloader flash.
+   *  User taps RESET → device reconnects as Daisy bootloader
+   *  with a different productName. */
+  async waitForDaisyBootloader(timeoutMs = 30000) {
     const start = Date.now();
 
-    // Wait for device to disappear (user taps RESET)
-    this.log('Waiting for device to disconnect...');
     while (Date.now() - start < timeoutMs) {
-      await this._sleep(500);
+      await this._sleep(1000);
       const devices = await navigator.usb.getDevices();
-      if (!devices.some(isDfuDevice)) break;
-    }
-
-    // Wait for device to reappear (Daisy bootloader starts)
-    this.log('Waiting for Daisy bootloader...');
-    while (Date.now() - start < timeoutMs) {
-      await this._sleep(500);
-      const devices = await navigator.usb.getDevices();
-      const dev = devices.find(isDfuDevice);
-      if (dev) {
-        await this._sleep(1500); // Let USB fully enumerate
-        this.device = dev;
-        return;
+      for (const dev of devices) {
+        if (dev.vendorId !== 0x0483 || dev.productId !== 0xDF11) continue;
+        const name = (dev.productName || '').toLowerCase();
+        // Daisy bootloader identifies as "Daisy Bootloader", not "DFU in FS Mode"
+        if (name.includes('daisy')) {
+          await this._sleep(500);
+          this.device = dev;
+          return;
+        }
       }
     }
 
-    throw new Error('Timed out. Tap RESET on Daisy (without holding BOOT) and try again.');
+    throw new Error('Timed out. Tap RESET on Daisy (without holding BOOT) and try flashing again.');
   }
 
   /**
@@ -339,8 +334,8 @@ export class DaisyDFU {
       this.log('Bootloader flashed! Tap RESET on your Daisy...');
       await this.close();
 
-      // Wait for device to reconnect (user resets the board)
-      await this.waitForReconnect(30000);
+      // Poll for Daisy bootloader (user resets the board)
+      await this.waitForDaisyBootloader(30000);
       await this.open();
 
       if (!this.isDaisyBootloader()) {
