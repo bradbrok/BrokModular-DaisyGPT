@@ -68,6 +68,7 @@ CXXFLAGS += $(C_INCLUDES)
 CXXFLAGS += -DCORE_CM7 -DSTM32H750xx -DSTM32H750IB -DARM_MATH_CM7 -DUSE_HAL_DRIVER -DUSE_FULL_LL_DRIVER
 CXXFLAGS += -DHSE_VALUE=16000000 -DDATA_IN_D2_SRAM
 CXXFLAGS += -std=gnu++14 -Wno-register
+CXXFLAGS += -include daisysp-lgpl.h
 
 ASFLAGS = $(MCU) -Wall -fdata-sections -ffunction-sections
 
