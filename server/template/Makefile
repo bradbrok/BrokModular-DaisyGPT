@@ -53,12 +53,14 @@ C_INCLUDES = \
   -I$(LIBDAISY_DIR)/Middlewares/ST/STM32_USB_Host_Library/Class/MSC/Inc \
   -I$(LIBDAISY_DIR)/Middlewares/Third_Party/FatFs/src \
   -I$(LIBDAISY_DIR)/core \
-  -I$(DAISYSP_DIR)/Source
+  -I$(DAISYSP_DIR)/Source \
+  -I$(DAISYSP_DIR)/DaisySP-LGPL/Source
 
 # Library paths
 LIBDIR = \
   -L$(LIBDAISY_DIR)/build \
-  -L$(DAISYSP_DIR)/build
+  -L$(DAISYSP_DIR)/build \
+  -L$(DAISYSP_DIR)/DaisySP-LGPL/build
 
 # Compile flags
 CXXFLAGS = $(MCU) $(OPT) -Wall -fdata-sections -ffunction-sections -fno-exceptions -fno-rtti
@@ -73,7 +75,7 @@ ASFLAGS = $(MCU) -Wall -fdata-sections -ffunction-sections
 LDFLAGS = $(MCU) -specs=nano.specs -specs=nosys.specs
 LDFLAGS += -T$(LDSCRIPT)
 LDFLAGS += $(LIBDIR)
-LDFLAGS += -ldaisysp -ldaisy -lc -lm -lnosys
+LDFLAGS += -ldaisysp -ldaisysp-lgpl -ldaisy -lc -lm -lnosys
 LDFLAGS += -Wl,--gc-sections
 LDFLAGS += -Wl,-Map=build/$(TARGET).map,--cref
 
