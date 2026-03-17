@@ -538,10 +538,11 @@
 <div class="dfu-overlay hidden" id="dfu-overlay">
   <div class="dfu-panel">
     <h2>&#x26a1; Flash to Daisy</h2>
-    <div class="dfu-instructions">
-      <strong>1.</strong> Put Daisy in DFU mode: hold <strong>BOOT</strong>, tap <strong>RESET</strong><br>
+    <div class="dfu-instructions" id="dfu-instructions">
+      <strong>1.</strong> Tap <strong>RESET</strong> on your Daisy (LED will flash when ready)<br>
       <strong>2.</strong> Click the device in Chrome's USB dialog<br>
-      <strong>3.</strong> Wait for flash to complete
+      <strong>3.</strong> Wait for flash to complete<br>
+      <em style="opacity:0.6; font-size:0.85em;">First time? Hold <strong>BOOT</strong> + tap <strong>RESET</strong> instead. The bootloader will be installed automatically.</em>
     </div>
     <div class="dfu-progress">
       <div class="dfu-progress-bar">
@@ -550,6 +551,7 @@
     </div>
     <div class="dfu-log" id="dfu-log"></div>
     <div class="modal-buttons" style="margin-top: 16px;">
+      <button class="btn" id="btn-flash-again" style="display:none;">Flash Again</button>
       <button class="btn" id="btn-close-dfu">Close</button>
     </div>
   </div>

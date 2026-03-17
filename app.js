@@ -2641,8 +2641,10 @@ async function flashToDaisy() {
       await dfu.close();
       dfu.log('');
       dfu.log('Daisy bootloader installed!');
-      dfu.log('Now: tap RESET (do NOT hold BOOT), then click Flash again.');
-      dfu.log('The bootloader LED will flash — that means it is ready.');
+      dfu.log('Now: tap RESET (do NOT hold BOOT), wait for LED to flash,');
+      dfu.log('then click "Flash Again" below.');
+      const flashAgainBtn = $('#btn-flash-again');
+      if (flashAgainBtn) flashAgainBtn.style.display = '';
 
     } else {
       // Direct internal flash
@@ -3397,6 +3399,10 @@ async function init() {
 
   // DFU
   $('#btn-close-dfu')?.addEventListener('click', closeDfuOverlay);
+  $('#btn-flash-again')?.addEventListener('click', () => {
+    $('#btn-flash-again').style.display = 'none';
+    flashToDaisy();
+  });
 
   // Close modals on backdrop click
   $('#api-key-modal')?.addEventListener('click', (e) => {
