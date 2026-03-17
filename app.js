@@ -2622,35 +2622,46 @@ async function flashToDaisy() {
     const addr = parseInt(state.armTargetAddress, 16) || 0x08000000;
     const isQSPI = addr >= 0x90000000;
 
-    if (isQSPI && dfu.isDaisyBootloader()) {
-      // Daisy bootloader detected — flash app directly to QSPI
-      dfu.log('Daisy bootloader detected — flashing to QSPI...');
-      await dfu.flash(state.armBinaryBytes.buffer, addr);
-      await dfu.close();
-      dfu.log('Done! Tap RESET to run your patch.');
+    if (isQSPI) {
+      const bootloaderInstalled = localStorage.getItem('daisy-bootloader-installed');
 
-    } else if (isQSPI && dfu.isRomBootloader()) {
-      // ROM bootloader — need to install Daisy bootloader first
-      dfu.log('ROM bootloader detected — installing Daisy bootloader first...');
-      const blUrl = state.remoteCompileUrl.replace(/\/+$/, '') + '/bootloader';
-      const blResp = await fetch(blUrl);
-      if (!blResp.ok) throw new Error(`Failed to fetch bootloader: ${blResp.status}`);
-      const bootloaderFirmware = await blResp.arrayBuffer();
+      if (bootloaderInstalled) {
+        // Bootloader already installed — flash app to QSPI
+        dfu.log('Flashing to QSPI...');
+        try {
+          await dfu.flash(state.armBinaryBytes.buffer, addr);
+          await dfu.close();
+          dfu.log('Done! Tap RESET to run your patch.');
+        } catch (e) {
+          // If QSPI flash fails, bootloader might be missing
+          localStorage.removeItem('daisy-bootloader-installed');
+          throw new Error(`QSPI flash failed: ${e.message}\nBootloader may need reinstalling — click Flash again.`);
+        }
 
-      await dfu.flash(bootloaderFirmware, 0x08000000);
-      await dfu.close();
-      dfu.log('');
-      dfu.log('Daisy bootloader installed!');
-      dfu.log('Now: tap RESET (do NOT hold BOOT), wait for LED to flash,');
-      dfu.log('then click "Flash Again" below.');
-      const flashAgainBtn = $('#btn-flash-again');
-      if (flashAgainBtn) {
-        flashAgainBtn.style.display = '';
-        flashAgainBtn.scrollIntoView({ behavior: 'smooth' });
+      } else {
+        // First time: install Daisy bootloader to internal flash
+        dfu.log('Installing Daisy bootloader (one-time setup)...');
+        const blUrl = state.remoteCompileUrl.replace(/\/+$/, '') + '/bootloader';
+        const blResp = await fetch(blUrl);
+        if (!blResp.ok) throw new Error(`Failed to fetch bootloader: ${blResp.status}`);
+        const bootloaderFirmware = await blResp.arrayBuffer();
+
+        await dfu.flash(bootloaderFirmware, 0x08000000);
+        localStorage.setItem('daisy-bootloader-installed', 'true');
+        await dfu.close();
+        dfu.log('');
+        dfu.log('Daisy bootloader installed!');
+        dfu.log('');
+        dfu.log('Now: tap RESET (do NOT hold BOOT), wait for LED to flash,');
+        dfu.log('then click "Flash Again" below.');
+        const flashAgainBtn = $('#btn-flash-again');
+        if (flashAgainBtn) {
+          flashAgainBtn.style.display = '';
+          flashAgainBtn.scrollIntoView({ behavior: 'smooth' });
+        }
       }
 
     } else {
-      // Direct internal flash
       await dfu.flash(state.armBinaryBytes.buffer, addr);
       await dfu.close();
       dfu.log('Done!');
