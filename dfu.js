@@ -292,27 +292,33 @@ export class DaisyDFU {
     this.log(`Flash complete! ${bytesWritten} bytes written.`);
   }
 
-  /** Wait for a DFU device to connect via WebUSB connect event */
+  /** Wait for device to disconnect (user taps RESET) then reconnect (bootloader starts) */
   async waitForReconnect(timeoutMs = 30000) {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        navigator.usb.removeEventListener('connect', onConnect);
-        reject(new Error('Device did not reconnect. Tap RESET on Daisy and try again.'));
-      }, timeoutMs);
+    const isDfuDevice = d => d.vendorId === 0x0483 && d.productId === 0xDF11;
+    const start = Date.now();
 
-      const onConnect = async (event) => {
-        const dev = event.device;
-        if (dev.vendorId === 0x0483 && dev.productId === 0xDF11) {
-          clearTimeout(timer);
-          navigator.usb.removeEventListener('connect', onConnect);
-          await this._sleep(1500); // Let device fully initialize
-          this.device = dev;
-          resolve();
-        }
-      };
+    // Wait for device to disappear (user taps RESET)
+    this.log('Waiting for device to disconnect...');
+    while (Date.now() - start < timeoutMs) {
+      await this._sleep(500);
+      const devices = await navigator.usb.getDevices();
+      if (!devices.some(isDfuDevice)) break;
+    }
 
-      navigator.usb.addEventListener('connect', onConnect);
-    });
+    // Wait for device to reappear (Daisy bootloader starts)
+    this.log('Waiting for Daisy bootloader...');
+    while (Date.now() - start < timeoutMs) {
+      await this._sleep(500);
+      const devices = await navigator.usb.getDevices();
+      const dev = devices.find(isDfuDevice);
+      if (dev) {
+        await this._sleep(1500); // Let USB fully enumerate
+        this.device = dev;
+        return;
+      }
+    }
+
+    throw new Error('Timed out. Tap RESET on Daisy (without holding BOOT) and try again.');
   }
 
   /**
