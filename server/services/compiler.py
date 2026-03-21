@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -70,7 +71,14 @@ def _base_env(board):
 
 def _write_sources(tmpdir, files):
     for filename, content in files.items():
+        # Reject path traversal attempts
+        if '..' in filename or filename.startswith('/') or not re.match(r'^[\w\-./]+$', filename):
+            raise ValueError(f"Invalid filename: {filename}")
         filepath = os.path.join(tmpdir, filename)
+        # Double-check resolved path stays within tmpdir
+        real_path = os.path.realpath(filepath)
+        if not real_path.startswith(os.path.realpath(tmpdir)):
+            raise ValueError(f"Path traversal detected: {filename}")
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, 'w') as f:
             f.write(content)

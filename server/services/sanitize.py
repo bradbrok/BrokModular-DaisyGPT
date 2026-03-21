@@ -26,13 +26,23 @@ ALLOWED_INCLUDES = {
 INCLUDE_RE = re.compile(r'#\s*include\s*[<"]([^>"]+)[>"]')
 
 
+ALLOWED_PREFIXES = (
+    'Source/', 'DaisySP/', 'Utility/', 'Control/', 'Drums/',
+    'Effects/', 'Filters/', 'Noise/', 'PhysicalModeling/', 'Synthesis/',
+)
+
+
 def sanitize_code(code):
     includes = INCLUDE_RE.findall(code)
     for inc in includes:
         # Allow DaisySP subdirectory includes like "Synthesis/oscillator.h"
         basename = inc.split('/')[-1] if '/' in inc else inc
-        # Check if it's a DaisySP subpath (Source/Module/file.h pattern)
-        is_daisysp_sub = inc.count('/') >= 1 and inc.endswith('.h')
+        # Anchor DaisySP subpaths to known prefixes; reject any '..' components
+        is_daisysp_sub = (
+            inc.endswith('.h') and
+            '..' not in inc and
+            any(inc.startswith(prefix) or f'/{prefix}' in inc for prefix in ALLOWED_PREFIXES)
+        )
 
         if basename not in ALLOWED_INCLUDES and not is_daisysp_sub:
             return f'#include "{inc}" is not permitted. Only Daisy/DaisySP and standard embedded headers are allowed.'
