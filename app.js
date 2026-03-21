@@ -13,6 +13,7 @@ import { AudioAnalyzer, analyzeAudioBuffer } from './audio-analyzer.js';
 import { profileCode, getProfileContext, getCycleReferenceTable } from './profiler.js';
 import { PatchEvolver } from './patch-evolver.js';
 import { exportProjectZip, importProjectZip, exportProjectURL, importProjectURL, downloadFile, createGist, loadFromGist, getGitHubToken, setGitHubToken } from './project-io.js';
+import { ScopeRenderer } from './scope-engine.js';
 
 // ─── State ─────────────────────────────────────────────────────────
 
@@ -75,6 +76,7 @@ const state = {
   peakHoldTime: 0,
   clipDetected: false,
   clipTime: 0,
+  scopeRenderer: null,
   // Remote ARM compilation
   remoteCompileUrl: localStorage.getItem('daisy-gpt-compile-url') || 'https://compile.brokmodular.com',
   isRemoteCompiling: false,
@@ -1765,6 +1767,12 @@ async function startAudio() {
     // Connect audio analyzer agent tool
     state.audioAnalyzer.connect(state.analyserNode, state.audioContext.sampleRate);
 
+    // Initialize scope renderer
+    const scopeCanvas = $('#scope-canvas');
+    if (scopeCanvas) {
+      state.scopeRenderer = new ScopeRenderer(scopeCanvas, state.analyserNode, state.audioContext.sampleRate);
+    }
+
     state.workletNode.port.postMessage({
       type: 'load-wasm',
       wasmBytes: state.wasmBytes,
@@ -1805,6 +1813,7 @@ function stopAudio() {
     state.analyserNode = null;
   }
 
+  state.scopeRenderer = null;
   stopDiagLoop();
 
   state.isPlaying = false;
@@ -1913,6 +1922,9 @@ let diagViewIndex = 0;
 const diagTimeBuf = new Float32Array(2048);
 const diagFreqBuf = new Float32Array(1024);
 
+const SCOPE_MODES = ['auto', 'dc', 'ac'];
+let scopeModeIndex = 0;
+
 function initDiagnostics() {
   const toggleBtn = $('#btn-diag-toggle');
   if (toggleBtn) {
@@ -1922,6 +1934,20 @@ function initDiagnostics() {
       toggleBtn.textContent = mode === 'scope' ? 'Scope' : mode === 'spectrum' ? 'FFT' : 'Both';
       $('#diag-scope')?.classList.toggle('hidden', mode === 'spectrum');
       $('#diag-spectrum')?.classList.toggle('hidden', mode === 'scope');
+    });
+  }
+
+  // Scope mode toggle (Auto / DC / AC)
+  const scopeModeBtn = $('#btn-scope-mode');
+  if (scopeModeBtn) {
+    scopeModeBtn.addEventListener('click', () => {
+      scopeModeIndex = (scopeModeIndex + 1) % SCOPE_MODES.length;
+      const mode = SCOPE_MODES[scopeModeIndex];
+      scopeModeBtn.textContent = mode.toUpperCase();
+      scopeModeBtn.className = 'btn scope-mode-btn scope-mode-' + mode;
+      if (state.scopeRenderer) {
+        state.scopeRenderer.setMode(mode);
+      }
     });
   }
 }
@@ -1956,48 +1982,9 @@ function renderDiagnostics() {
 }
 
 function renderScope() {
-  const canvas = $('#scope-canvas');
-  if (!canvas || !state.analyserNode) return;
-
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width;
-  const h = canvas.height;
-
-  state.analyserNode.getFloatTimeDomainData(diagTimeBuf);
-
-  ctx.fillStyle = '#0a0a0a';
-  ctx.fillRect(0, 0, w, h);
-
-  // Center line
-  ctx.strokeStyle = '#262626';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, h / 2);
-  ctx.lineTo(w, h / 2);
-  ctx.stroke();
-
-  // Find rising zero-crossing for trigger stability
-  let triggerIndex = 0;
-  for (let i = 1; i < diagTimeBuf.length - w; i++) {
-    if (diagTimeBuf[i - 1] <= 0 && diagTimeBuf[i] > 0) {
-      triggerIndex = i;
-      break;
-    }
+  if (state.scopeRenderer) {
+    state.scopeRenderer.render();
   }
-
-  // Waveform
-  ctx.strokeStyle = '#d4a843';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  const sliceLen = Math.min(w, diagTimeBuf.length - triggerIndex);
-  for (let i = 0; i < sliceLen; i++) {
-    const sample = diagTimeBuf[triggerIndex + i];
-    const x = (i / sliceLen) * w;
-    const y = (1 - sample) * h / 2;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
 }
 
 function renderSpectrum() {
