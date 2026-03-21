@@ -294,6 +294,146 @@ export function setGitHubToken(token) {
   }
 }
 
+// ─── Export/Import All Projects ──────────────────────────────────
+
+/**
+ * Export ALL saved projects as a single ZIP with subdirectories.
+ * Each project becomes a folder containing its source files and a manifest.
+ */
+export async function exportAllProjectsZip(loadProjectsList, loadProjectByName) {
+  const projects = loadProjectsList();
+  if (projects.length === 0) {
+    throw new Error('No saved projects to export');
+  }
+
+  const files = {};
+
+  for (const entry of projects) {
+    const project = loadProjectByName(entry.name);
+    if (!project) continue;
+
+    const prefix = sanitizeFolderName(project.name) + '/';
+
+    // Add all project files under the project folder
+    for (const [path, file] of Object.entries(project.files)) {
+      files[prefix + path] = file.content;
+    }
+
+    // Add a per-project manifest
+    files[prefix + 'daisy-project.json'] = JSON.stringify({
+      name: project.name,
+      board: project.board,
+      activeFile: project.activeFile,
+      description: project.description || '',
+      tags: project.tags || [],
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+    }, null, 2);
+  }
+
+  // Build and download the ZIP
+  const zipBlob = await buildZip(files);
+  const url = URL.createObjectURL(zipBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'daisy-gpt-all-projects.zip';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Import all projects from a bulk ZIP (each subdirectory = one project).
+ * @param {File} file - The zip file
+ * @param {Function} saveProjectFn - The saveProject function
+ * @returns {Promise<string[]>} Array of imported project names
+ */
+export async function importAllProjectsZip(file, saveProjectFn) {
+  const buffer = await file.arrayBuffer();
+  const entries = await readZip(buffer);
+
+  // Group files by top-level directory
+  const projectDirs = {};
+  for (const [path, content] of Object.entries(entries)) {
+    const slashIdx = path.indexOf('/');
+    if (slashIdx < 0) continue; // Skip root-level files
+    const dir = path.substring(0, slashIdx);
+    const relPath = path.substring(slashIdx + 1);
+    if (!relPath) continue; // Skip empty paths
+    if (!projectDirs[dir]) projectDirs[dir] = {};
+    projectDirs[dir][relPath] = content;
+  }
+
+  const importedNames = [];
+
+  for (const [dir, dirFiles] of Object.entries(projectDirs)) {
+    // Read manifest if available
+    let manifest = null;
+    if (dirFiles['daisy-project.json']) {
+      try {
+        manifest = JSON.parse(dirFiles['daisy-project.json']);
+      } catch { /* ignore */ }
+    }
+
+    const project = {
+      name: manifest?.name || dir,
+      board: manifest?.board || 'patch',
+      activeFile: manifest?.activeFile || 'main.cpp',
+      openTabs: [],
+      files: {},
+      description: manifest?.description || '',
+      tags: manifest?.tags || [],
+      createdAt: manifest?.createdAt || Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    // Add source files
+    for (const [relPath, content] of Object.entries(dirFiles)) {
+      if (relPath === 'daisy-project.json') continue;
+      if (relPath.match(/\.(cpp|cc|c|h|hpp|hxx)$/i)) {
+        project.files[relPath] = { content, dirty: false };
+      }
+    }
+
+    if (Object.keys(project.files).length === 0) continue;
+
+    if (!project.files[project.activeFile]) {
+      project.activeFile = Object.keys(project.files)[0];
+    }
+    project.openTabs = [project.activeFile];
+
+    saveProjectFn(project);
+    importedNames.push(project.name);
+  }
+
+  return importedNames;
+}
+
+function sanitizeFolderName(name) {
+  return name.replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, '_');
+}
+
+// ─── Fork from Gist ─────────────────────────────────────────────────
+
+/**
+ * Load a Gist as a NEW project (does not overwrite current).
+ * Appends a suffix to avoid name collisions.
+ * @param {string} gistId - Gist ID or URL
+ * @param {string} [token] - Optional GitHub token
+ * @returns {Promise<Object>} The new project
+ */
+export async function forkFromGist(gistId, token) {
+  const project = await loadFromGist(gistId, token);
+
+  // Make it a fresh project by changing name and timestamps
+  project.name = project.name + '-fork';
+  project.createdAt = Date.now();
+  project.updatedAt = Date.now();
+  delete project.gistId;
+  delete project.gistUrl;
+
+  return project;
+}
+
 // ─── ZIP Utilities (no dependencies) ─────────────────────────────
 
 /**

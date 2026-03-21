@@ -8,11 +8,11 @@ import { PROVIDERS, getApiKey, setApiKey, migrateOldKey, initKeyStore, getOllama
 import { MIDIController } from './midi.js';
 import { WasmClangCompiler } from './compiler.js';
 import { BOARDS, BOARD_IDS, DEFAULT_BOARD, getBoardPromptFragment, getBoardKnobCount, getBoardIOSummary } from './boards.js';
-import { createProject, addFile, deleteFile, renameFile, updateFileContent, getActiveFileContent, getFilePaths, getCppFiles, getAllFiles, getProjectSummary, getProjectContext, saveProject, saveProjectAs, loadProject, loadProjectByName, deleteProjectByName, duplicateProject, renameProject, loadProjectsList, migrateFromLegacy } from './project-manager.js';
+import { createProject, addFile, deleteFile, renameFile, updateFileContent, getActiveFileContent, getFilePaths, getCppFiles, getAllFiles, getProjectSummary, getProjectContext, saveProject, saveProjectAs, loadProject, loadProjectByName, deleteProjectByName, duplicateProject, renameProject, loadProjectsList, migrateFromLegacy, hasUnsavedChanges, saveVersion, getVersionHistory, restoreVersion, clearVersionHistory, searchProjects, TEMPLATES } from './project-manager.js';
 import { AudioAnalyzer, analyzeAudioBuffer } from './audio-analyzer.js';
 import { profileCode, getProfileContext, getCycleReferenceTable } from './profiler.js';
 import { PatchEvolver } from './patch-evolver.js';
-import { exportProjectZip, importProjectZip, exportProjectURL, importProjectURL, downloadFile, createGist, loadFromGist, getGitHubToken, setGitHubToken } from './project-io.js';
+import { exportProjectZip, importProjectZip, exportProjectURL, importProjectURL, downloadFile, createGist, loadFromGist, getGitHubToken, setGitHubToken, exportAllProjectsZip, importAllProjectsZip, forkFromGist } from './project-io.js';
 
 // ─── State ─────────────────────────────────────────────────────────
 
@@ -2352,6 +2352,7 @@ function showProjects() {
   if (overlay) {
     overlay.classList.remove('hidden');
     renderProjectsList();
+    renderSearchUI();
     // Sync current project name
     const nameInput = $('#project-name-input');
     if (nameInput && state.project) nameInput.value = state.project.name;
@@ -2381,10 +2382,16 @@ function renderProjectsList() {
   list.innerHTML = projects.map(entry => {
     const date = new Date(entry.updatedAt).toLocaleDateString([], { month: 'short', day: 'numeric' });
     const isCurrent = state.project && entry.name === state.project.name;
+    const descHtml = entry.description ? `<span class="projects-item-desc">${escapeHtml(entry.description)}</span>` : '';
+    const tagsHtml = (entry.tags && entry.tags.length > 0)
+      ? `<span class="projects-item-tags">${entry.tags.map(t => `<span class="projects-tag">${escapeHtml(t)}</span>`).join('')}</span>`
+      : '';
     return `<div class="projects-item${isCurrent ? ' active' : ''}" data-name="${escapeHtml(entry.name)}">
       <div class="projects-item-info">
         <span class="projects-item-name">${escapeHtml(entry.name)}</span>
+        ${descHtml}
         <span class="projects-item-meta">${entry.board} · ${entry.fileCount} file${entry.fileCount !== 1 ? 's' : ''} · ${date}</span>
+        ${tagsHtml}
       </div>
       <div class="projects-item-actions">
         ${isCurrent ? '<span class="projects-item-current">current</span>' : `<button class="btn btn-tiny projects-btn-open" data-name="${escapeHtml(entry.name)}">Open</button>`}
@@ -2534,6 +2541,42 @@ async function handleImportGist() {
   }
 }
 
+async function handleForkGist() {
+  const tokenInput = $('#gist-token');
+  const urlInput = $('#gist-import-url');
+  const token = tokenInput?.value?.trim();
+  const gistUrl = urlInput?.value?.trim();
+
+  if (!gistUrl) {
+    showToast('Enter a Gist URL or ID');
+    return;
+  }
+
+  if (token) setGitHubToken(token);
+
+  const btn = $('#btn-confirm-gist');
+  if (btn) btn.textContent = 'Forking...';
+
+  try {
+    const project = await forkFromGist(gistUrl, token);
+    if (state.project) saveProject(state.project);
+
+    state.project = project;
+    syncProjectToState();
+    syncCodeToEditor();
+    renderProjectFileTree();
+    saveProject(state.project);
+    showToast(`Forked as "${project.name}"`);
+    updateUI();
+    closeGistModal();
+    closeProjects();
+  } catch (err) {
+    showToast(`Fork error: ${err.message}`);
+  } finally {
+    if (btn) btn.textContent = 'Fork';
+  }
+}
+
 function showGistModal(mode = 'share') {
   state._gistMode = mode;
   const modal = $('#gist-modal');
@@ -2555,6 +2598,11 @@ function showGistModal(mode = 'share') {
     if (importRow) importRow.classList.remove('hidden');
     if (publicRow) publicRow.classList.add('hidden');
     if (confirmBtn) confirmBtn.textContent = 'Import';
+  } else if (mode === 'fork') {
+    if (title) title.textContent = 'Fork from GitHub Gist';
+    if (importRow) importRow.classList.remove('hidden');
+    if (publicRow) publicRow.classList.add('hidden');
+    if (confirmBtn) confirmBtn.textContent = 'Fork';
   } else {
     if (title) title.textContent = 'Share on GitHub Gist';
     if (importRow) importRow.classList.add('hidden');
@@ -2566,6 +2614,260 @@ function showGistModal(mode = 'share') {
 function closeGistModal() {
   const modal = $('#gist-modal');
   if (modal) modal.classList.add('hidden');
+}
+
+// ─── Dirty State Indicator ──────────────────────────────────────────
+
+function updateDirtyIndicator() {
+  let dot = $('.dirty-indicator');
+  if (!dot) {
+    dot = document.createElement('span');
+    dot.className = 'dirty-indicator';
+    const nameInput = $('#project-name-input');
+    if (nameInput && nameInput.parentNode) {
+      nameInput.parentNode.insertBefore(dot, nameInput.nextSibling);
+    }
+  }
+  if (state.project && hasUnsavedChanges(state.project)) {
+    dot.classList.add('visible');
+  } else {
+    dot.classList.remove('visible');
+  }
+}
+
+// ─── Auto-save Indicator ───────────────────────────────────────────
+
+let autoSaveTimer = null;
+
+function startAutoSave() {
+  if (autoSaveTimer) clearInterval(autoSaveTimer);
+  autoSaveTimer = setInterval(() => {
+    if (state.project && hasUnsavedChanges(state.project)) {
+      saveProject(state.project);
+      showAutoSaveIndicator();
+      updateDirtyIndicator();
+    }
+  }, 30000); // Auto-save every 30 seconds if dirty
+}
+
+function showAutoSaveIndicator() {
+  let indicator = $('.autosave-indicator');
+  if (!indicator) {
+    indicator = document.createElement('div');
+    indicator.className = 'autosave-indicator';
+    document.body.appendChild(indicator);
+  }
+  indicator.textContent = 'Saved';
+  indicator.classList.add('show');
+  setTimeout(() => indicator.classList.remove('show'), 1500);
+}
+
+// ─── Template Gallery ──────────────────────────────────────────────
+
+function showTemplateGallery() {
+  // Remove existing overlay
+  let overlay = $('#template-gallery-overlay');
+  if (overlay) overlay.remove();
+
+  overlay = document.createElement('div');
+  overlay.id = 'template-gallery-overlay';
+  overlay.className = 'modal-overlay';
+
+  const templateKeys = Object.keys(TEMPLATES);
+  const cards = templateKeys.map(key => {
+    const t = TEMPLATES[key];
+    return `<div class="template-card" data-template="${key}">
+      <div class="template-card-name">${escapeHtml(t.name)}</div>
+      <div class="template-card-desc">${escapeHtml(t.description)}</div>
+      <div class="template-card-board">Board: ${escapeHtml(t.board)}</div>
+    </div>`;
+  }).join('');
+
+  overlay.innerHTML = `
+    <div class="modal modal-templates">
+      <h2>Project Templates</h2>
+      <p class="template-gallery-subtitle">Choose a starter template to create a new project.</p>
+      <div class="template-gallery-grid">${cards}</div>
+      <div class="modal-buttons">
+        <button class="btn" id="btn-cancel-templates">Cancel</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  // Handle card clicks
+  overlay.querySelectorAll('.template-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const key = card.dataset.template;
+      createProjectFromTemplate(key);
+      overlay.remove();
+    });
+  });
+
+  // Cancel
+  overlay.querySelector('#btn-cancel-templates').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+}
+
+function createProjectFromTemplate(templateKey) {
+  const template = TEMPLATES[templateKey];
+  if (!template) return;
+
+  if (state.project) saveProject(state.project);
+
+  const project = createProject(template.name, template.board);
+  project.files['main.cpp'].content = template.code;
+  project.description = template.description;
+
+  state.project = project;
+  syncProjectToState();
+  syncCodeToEditor();
+  renderProjectFileTree();
+  saveProject(state.project);
+  showToast(`Created "${template.name}" from template`);
+  updateUI();
+  updateBoardBadge();
+  updateKnobsForBoard();
+}
+
+// ─── Search Across Projects ────────────────────────────────────────
+
+function renderSearchUI() {
+  const panel = $('#projects-panel') || document.querySelector('.projects-panel');
+  if (!panel) return;
+
+  // Don't add twice
+  if (panel.querySelector('.projects-search')) return;
+
+  const searchWrap = document.createElement('div');
+  searchWrap.className = 'projects-search';
+  searchWrap.innerHTML = `
+    <input type="text" class="projects-search-input" id="projects-search-input" placeholder="Search across all projects..." spellcheck="false">
+    <div class="projects-search-results hidden" id="projects-search-results"></div>
+  `;
+
+  // Insert before the project list
+  const listHeader = panel.querySelector('.projects-list-header');
+  if (listHeader) {
+    panel.insertBefore(searchWrap, listHeader);
+  } else {
+    panel.appendChild(searchWrap);
+  }
+
+  const searchInput = searchWrap.querySelector('#projects-search-input');
+  let searchTimer = null;
+
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      const query = searchInput.value.trim();
+      const resultsEl = searchWrap.querySelector('#projects-search-results');
+      if (!query) {
+        resultsEl.classList.add('hidden');
+        resultsEl.innerHTML = '';
+        return;
+      }
+
+      const results = searchProjects(query);
+      if (results.length === 0) {
+        resultsEl.innerHTML = '<div class="search-no-results">No matches found.</div>';
+      } else {
+        // Limit to 20 results
+        const limited = results.slice(0, 20);
+        resultsEl.innerHTML = limited.map(r => {
+          return `<div class="search-result-item" data-project="${escapeHtml(r.projectName)}">
+            <span class="search-result-project">${escapeHtml(r.projectName)}</span>
+            <span class="search-result-file">${escapeHtml(r.fileName)}${r.lineNumber ? ':' + r.lineNumber : ''}</span>
+            <span class="search-result-snippet">${escapeHtml(r.snippet)}</span>
+          </div>`;
+        }).join('');
+
+        // Click to open project
+        resultsEl.querySelectorAll('.search-result-item').forEach(item => {
+          item.addEventListener('click', () => {
+            switchToProject(item.dataset.project);
+            resultsEl.classList.add('hidden');
+          });
+        });
+      }
+      resultsEl.classList.remove('hidden');
+    }, 300);
+  });
+}
+
+// ─── Version History UI ────────────────────────────────────────────
+
+function showVersionHistory() {
+  if (!state.project) return;
+
+  let overlay = $('#version-history-overlay');
+  if (overlay) overlay.remove();
+
+  const versions = getVersionHistory(state.project.name);
+
+  overlay = document.createElement('div');
+  overlay.id = 'version-history-overlay';
+  overlay.className = 'modal-overlay';
+
+  const versionItems = versions.length === 0
+    ? '<div class="version-empty">No version history yet.</div>'
+    : versions.map((v, idx) => {
+      const date = new Date(v.timestamp);
+      const dateStr = date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      const fileCount = Object.keys(v.files).length;
+      return `<div class="version-item" data-index="${idx}">
+        <span class="version-date">${dateStr}</span>
+        <span class="version-meta">${fileCount} file${fileCount !== 1 ? 's' : ''}</span>
+        <button class="btn btn-tiny version-restore-btn" data-index="${idx}">Restore</button>
+      </div>`;
+    }).join('');
+
+  overlay.innerHTML = `
+    <div class="modal modal-versions">
+      <h2>Version History</h2>
+      <p class="version-subtitle">${escapeHtml(state.project.name)} — last ${versions.length} saves</p>
+      <div class="version-list">${versionItems}</div>
+      <div class="modal-buttons">
+        ${versions.length > 0 ? '<button class="btn btn-danger" id="btn-clear-versions">Clear History</button>' : ''}
+        <button class="btn" id="btn-close-versions">Close</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  // Restore buttons
+  overlay.querySelectorAll('.version-restore-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.index);
+      if (confirm(`Restore version from ${new Date(versions[idx].timestamp).toLocaleString()}?`)) {
+        restoreVersion(state.project, idx);
+        syncProjectToState();
+        syncCodeToEditor();
+        saveProject(state.project);
+        updateUI();
+        showToast('Version restored');
+        overlay.remove();
+      }
+    });
+  });
+
+  // Clear history
+  overlay.querySelector('#btn-clear-versions')?.addEventListener('click', () => {
+    if (confirm('Clear all version history?')) {
+      clearVersionHistory(state.project.name);
+      overlay.remove();
+      showToast('Version history cleared');
+    }
+  });
+
+  overlay.querySelector('#btn-close-versions').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
 }
 
 // ─── DFU Flash ─────────────────────────────────────────────────────
@@ -2930,6 +3232,7 @@ function syncEditorToCode() {
     if (state.project && state.project.activeFile) {
       updateFileContent(state.project, state.project.activeFile, state.code);
     }
+    updateDirtyIndicator();
   }
 }
 
@@ -3403,10 +3706,39 @@ async function init() {
   });
   $('#btn-share-gist')?.addEventListener('click', () => showGistModal('share'));
   $('#btn-import-gist')?.addEventListener('click', () => showGistModal('import'));
+  $('#btn-fork-gist')?.addEventListener('click', () => showGistModal('fork'));
+  $('#btn-templates')?.addEventListener('click', showTemplateGallery);
+  $('#btn-version-history')?.addEventListener('click', showVersionHistory);
+  $('#btn-export-all')?.addEventListener('click', async () => {
+    try {
+      await exportAllProjectsZip(loadProjectsList, loadProjectByName);
+      showToast('All projects exported');
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+  $('#btn-import-all')?.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.zip';
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        const names = await importAllProjectsZip(file, saveProject);
+        showToast(`Imported ${names.length} project${names.length !== 1 ? 's' : ''}`);
+        renderProjectsList();
+      } catch (err) {
+        showToast(`Import failed: ${err.message}`);
+      }
+    };
+    input.click();
+  });
 
   // Gist modal
   $('#btn-confirm-gist')?.addEventListener('click', () => {
     if (state._gistMode === 'import') handleImportGist();
+    else if (state._gistMode === 'fork') handleForkGist();
     else handleShareGist();
   });
   $('#btn-cancel-gist')?.addEventListener('click', closeGistModal);
@@ -3573,6 +3905,10 @@ async function init() {
   if (!(await currentApiKey())) {
     setTimeout(showApiKeyModal, 500);
   }
+
+  // Start auto-save timer
+  startAutoSave();
+  updateDirtyIndicator();
 
   // Initial UI state
   updateUI();
